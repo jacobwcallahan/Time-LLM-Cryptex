@@ -307,8 +307,8 @@ if accelerator.is_local_main_process:
     if final_test_loss is not None and final_test_metric is not None:
         metrics = {
             "model_id": args.model_id,
-            args.loss.lower(): final_test_loss,
-            args.metric.lower(): final_test_metric
+            args.loss.lower(): f"{final_test_loss:.7f}",
+            args.metric.lower(): f"{final_test_metric:.7f}"
         }
         # Print metrics in a parseable format (/!\ Make sure the formatting agrees with the parsing in launch_experiment.py)
         print(f"FINAL_METRICS:{json.dumps(metrics)}")
