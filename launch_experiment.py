@@ -241,6 +241,7 @@ def launch_experiment(args):
                         # Safely parse the entire JSON metrics object
                         metrics_json = line.replace("FINAL_METRICS:", "").strip()
                         final_metrics = json.loads(metrics_json)
+                        final_metrics.pop("model_id", None)
                         status = 'completed'
                         break
             if status == 'failed':
