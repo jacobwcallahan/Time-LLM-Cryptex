@@ -11,3 +11,8 @@ peft==0.4.0
 transformers
 deepspeed==0.14.0
 sentencepiece==0.2.0
+mlflow
+optuna
+optuna-dashboard
+psycopg2-binary
+boto3
