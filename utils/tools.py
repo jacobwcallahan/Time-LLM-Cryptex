@@ -139,35 +139,15 @@ def vali(args, accelerator, model, vali_data, vali_loader, criterion, metric_fun
     total_metric_loss = []
     model.eval()
     with torch.no_grad():
-        for i, (batch_x, batch_y, batch_x_mark, batch_y_mark) in tqdm(enumerate(vali_loader)):
-            batch_x = batch_x.float().to(accelerator.device)
-            batch_y = batch_y.float()
+        for i, (input_data, target_data) in tqdm(enumerate(vali_loader)):
+            input_data = input_data.float().to(accelerator.device)
+            outputs = model(input_data)
 
-            batch_x_mark = batch_x_mark.float().to(accelerator.device)
-            batch_y_mark = batch_y_mark.float().to(accelerator.device)
-
-            # decoder input
-            dec_inp = torch.zeros_like(batch_y[:, -args.pred_len:, :]).float()
-            dec_inp = torch.cat([batch_y[:, :args.label_len, :], dec_inp], dim=1).float().to(
-                accelerator.device)
-            # encoder - decoder
-            if args.use_amp:
-                with torch.cuda.amp.autocast():
-                    if args.output_attention:
-                        outputs = model(batch_x, batch_x_mark, dec_inp, batch_y_mark)[0]
-                    else:
-                        outputs = model(batch_x, batch_x_mark, dec_inp, batch_y_mark)
-            else:
-                if args.output_attention:
-                    outputs = model(batch_x, batch_x_mark, dec_inp, batch_y_mark)[0]
-                else:
-                    outputs = model(batch_x, batch_x_mark, dec_inp, batch_y_mark)
-
-            outputs, batch_y = accelerator.gather_for_metrics((outputs, batch_y))
+            outputs, batch_y = accelerator.gather_for_metrics((outputs, target_data))
 
             f_dim = -1 if args.features == 'MS' else 0
             outputs = outputs[:, -args.pred_len:, f_dim:]
-            batch_y = batch_y[:, -args.pred_len:, f_dim:].to(accelerator.device)
+            batch_y = batch_y[:, :, f_dim:].to(accelerator.device)
 
             pred = outputs.detach()
             true = batch_y.detach()
@@ -196,7 +176,7 @@ def test(args, accelerator, model, train_loader, vali_loader, criterion):
     with torch.no_grad():
         B, _, C = x.shape
         dec_inp = torch.zeros((B, args.pred_len, C)).float().to(accelerator.device)
-        dec_inp = torch.cat([x[:, -args.label_len:, :], dec_inp], dim=1)
+        dec_inp = torch.cat([x[:, -args.pred_len:, :], dec_inp], dim=1)
         outputs = torch.zeros((B, args.pred_len, C)).float().to(accelerator.device)
         id_list = np.arange(0, B, args.eval_batch_size)
         id_list = np.append(id_list, B)
@@ -217,7 +197,7 @@ def test(args, accelerator, model, train_loader, vali_loader, criterion):
         true = accelerator.gather_for_metrics(true)
         batch_y_mark = accelerator.gather_for_metrics(batch_y_mark)
 
-        loss = criterion(x[:, :, 0], args.frequency_map, pred[:, :, 0], true, batch_y_mark)
+        loss = criterion(pred[:, :, 0], true)
 
     model.train()
     return loss
