@@ -84,56 +84,6 @@ class EarlyStopping:
         self.val_loss_min = val_loss
 
 
-class dotdict(dict):
-    """dot.notation access to dictionary attributes"""
-    __getattr__ = dict.get
-    __setattr__ = dict.__setitem__
-    __delattr__ = dict.__delitem__
-
-
-class StandardScaler():
-    def __init__(self, mean, std):
-        self.mean = mean
-        self.std = std
-
-    def transform(self, data):
-        return (data - self.mean) / self.std
-
-    def inverse_transform(self, data):
-        return (data * self.std) + self.mean
-
-def adjustment(gt, pred):
-    anomaly_state = False
-    for i in range(len(gt)):
-        if gt[i] == 1 and pred[i] == 1 and not anomaly_state:
-            anomaly_state = True
-            for j in range(i, 0, -1):
-                if gt[j] == 0:
-                    break
-                else:
-                    if pred[j] == 0:
-                        pred[j] = 1
-            for j in range(i, len(gt)):
-                if gt[j] == 0:
-                    break
-                else:
-                    if pred[j] == 0:
-                        pred[j] = 1
-        elif gt[i] == 0:
-            anomaly_state = False
-        if anomaly_state:
-            pred[i] = 1
-    return gt, pred
-
-
-def cal_accuracy(y_pred, y_true):
-    return np.mean(y_pred == y_true)
-
-
-def del_files(dir_path):
-    shutil.rmtree(dir_path)
-
-
 def vali(args, accelerator, model, vali_data, vali_loader, criterion, metric_func):
     total_loss = []
     total_metric_loss = []
@@ -204,10 +154,7 @@ def test(args, accelerator, model, train_loader, vali_loader, criterion):
 
 
 def load_content(args):
-    if 'ETT' in args.data:
-        file = 'ETT'
-    else:
-        file = args.data
-    with open('./dataset/prompt_bank/{0}.txt'.format(file), 'r') as f:
+    file = args.data
+    with open(f'./dataset/prompt_bank/{file}.txt', 'r') as f:
         content = f.read()
     return content

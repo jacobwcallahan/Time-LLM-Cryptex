@@ -14,7 +14,8 @@ from contextlib import nullcontext
 from utils.metrics import get_loss_function, get_metric_function
 from models import TimeLLM
 from utils.data_provider import data_provider
-from utils.tools import del_files, EarlyStopping, adjust_learning_rate, vali
+from utils.tools import EarlyStopping, adjust_learning_rate, vali
+import shutil
 
 import mlflow
 import mlflow.pytorch
@@ -259,7 +260,7 @@ def run_training(args, accelerator):
                 accelerator.print(f"Scaler has been logged to MLflow.")
             # Clean up temporary early stopping checkpoints
             if os.path.exists(temp_checkpoint_path):
-                del_files(temp_checkpoint_path)
+                shutil.rmtree(temp_checkpoint_path)
 
 def main():
     """

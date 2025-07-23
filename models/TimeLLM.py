@@ -8,6 +8,7 @@ from transformers import LlamaConfig, LlamaModel, LlamaTokenizer, GPT2Config, GP
 from layers.Embed import PatchEmbedding
 import transformers
 from layers.StandardNorm import Normalize
+from utils.tools import load_content
 
 transformers.logging.set_verbosity_error()
 
@@ -240,9 +241,7 @@ class Model(nn.Module):
             param.requires_grad = False
 
         # Require a prompt to be passed for context
-        if not getattr(configs, 'content', None):
-            raise ValueError('You must provide a prompt via configs.content.')
-        self.description = configs.content
+        self.description = load_content(configs)
 
         self.dropout = nn.Dropout(configs.dropout)
 
