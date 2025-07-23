@@ -111,7 +111,6 @@ def objective(trial):
         '--metric', metric,
         # Static Parameters
         '--llm_model', llm_model,
-        '--llm_dim', '4096',
         '--task_name', task_name,
         '--is_training', '1',
         '--model_comment', f"optuna_trial_{trial.number}",

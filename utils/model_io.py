@@ -25,7 +25,7 @@ def load_model_and_scaler_from_mlflow(run_id, model_class):
     for key, value in params.items():
         if key in ['seq_len', 'pred_len', 'd_model', 'llm_layers', 
                    'num_tokens', 'patch_len', 'stride', 'enc_in', 'dec_in', 'c_out',
-                   'factor', 'd_ff', 'n_heads', 'd_layers', 'moving_avg', 'llm_dim']:
+                   'factor', 'd_ff', 'n_heads', 'd_layers', 'moving_avg']:
             setattr(args, key, int(value))
         elif key in ['dropout']:
             setattr(args, key, float(value))

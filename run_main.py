@@ -65,7 +65,6 @@ def parse_args():
     parser.add_argument('--stride', type=int, default=8, help='Stride for patch-based models')
     parser.add_argument('--prompt_domain', type=int, default=0, help='Prompt domain (for prompt-based models)')
     parser.add_argument('--llm_model', type=str, default='LLAMA', help='LLM model name (for logging/experiment tracking)')
-    parser.add_argument('--llm_dim', type=int, default=4096, help='LLM model dimension')
 
     # Optimization and training arguments
     parser.add_argument('--num_workers', type=int, default=10, help='Number of data loader workers')
@@ -112,12 +111,12 @@ def run_training(args, accelerator):
             mlflow.log_params(vars(args))
 
         # Load data for training, validation, and testing
-        train_data, train_loader = data_provider(args, 'train')
-        vali_data, vali_loader = data_provider(args, 'val')
-        test_data, test_loader = data_provider(args, 'test')
+        train_data, train_loader = data_provider(args, 'train')  # train_data: Dataset, train_loader: DataLoader
+        vali_data, vali_loader = data_provider(args, 'val')      # vali_data: Dataset, vali_loader: DataLoader
+        test_data, test_loader = data_provider(args, 'test')     # test_data: Dataset, test_loader: DataLoader
 
         # Initialize the TimeLLM model
-        model = TimeLLM.Model(args).float()
+        model = TimeLLM.Model(args).float()  # Model expects input: [batch, seq_len, num_features]
         temp_checkpoint_path = os.path.join(args.checkpoints, args.model_id)
 
         if accelerator.is_local_main_process:
@@ -163,11 +162,11 @@ def run_training(args, accelerator):
                 model_optim.zero_grad()
 
                 # Move data to accelerator device
-                input_data = input_data.float().to(accelerator.device)
-                target_data = target_data.float().to(accelerator.device)
+                input_data = input_data.float().to(accelerator.device)  # [batch, seq_len, num_features]
+                target_data = target_data.float().to(accelerator.device)  # [batch, pred_len, num_features]
 
                 # Forward pass
-                outputs = model(input_data)
+                outputs = model(input_data)  # [batch, pred_len, num_features]
 
                 # Loss calculation (match validation logic)
                 f_dim = -1 if args.features == 'MS' else 0
@@ -201,8 +200,8 @@ def run_training(args, accelerator):
             # Calculate average training loss
             train_loss = np.average(train_loss)
             # Validation and test evaluation
-            vali_loss, vali_metric = vali(args, accelerator, model, vali_data, vali_loader, criterion, metric_func)
-            test_loss, test_metric = vali(args, accelerator, model, test_data, test_loader, criterion, metric_func)
+            vali_loss, vali_metric = vali(args, accelerator, model, vali_data, vali_loader, criterion, metric_func)  # vali_loss: float, vali_metric: float
+            test_loss, test_metric = vali(args, accelerator, model, test_data, test_loader, criterion, metric_func)  # test_loss: float, test_metric: float
             accelerator.print(f"Epoch: {epoch + 1} | Train Loss: {train_loss:.7f} Vali Loss: {vali_loss:.7f} Test Loss: {test_loss:.7f}")
             accelerator.print(f"{args.metric} Metric: {test_metric:.7f}")
 
@@ -251,7 +250,7 @@ def run_training(args, accelerator):
             # Save scaler for inference
             import pickle
             import tempfile
-            scaler = train_data.scaler if hasattr(train_data, 'scaler') else None
+            scaler = train_data.scaler if hasattr(train_data, 'scaler') else None  # StandardScaler or None
             if scaler is not None:
                 with tempfile.NamedTemporaryFile(mode='wb', suffix=".pkl", delete=False) as tmp:
                     pickle.dump(scaler, tmp)

@@ -23,17 +23,84 @@ class FlattenHead(nn.Module):
         head_dropout: Dropout rate for the head
     """
     def __init__(self, n_vars, nf, target_window, head_dropout=0):
+        #              enc_in, head_nf, pred_len, dropout
         super().__init__()
         self.flatten = nn.Flatten(start_dim=-2)
         self.linear = nn.Linear(nf, target_window)
         self.dropout = nn.Dropout(head_dropout)
 
     def forward(self, x):
-        # x: [batch, n_vars, patch_nums, d_ff]
-        x = self.flatten(x)
-        x = self.linear(x)
-        x = self.dropout(x)
+        # x: [batch, n_vars, d_ff, patch_nums]
+        x = self.flatten(x)  # [batch, n_vars, d_ff * patch_nums]
+        x = self.linear(x)   # [batch, n_vars, target_window] (head_nf = d_ff * patch_nums)
+        x = self.dropout(x)  # [batch, n_vars, target_window]
         return x
+
+
+class ReprogrammingLayer(nn.Module):
+    """
+    ReprogrammingLayer adapts time series patch embeddings to the LLM embedding space using multi-head attention-like projections.
+    - Projects target (patch) embeddings, source (LLM) embeddings, and value (LLM) embeddings to a shared space.
+    - Computes attention scores between target and source, applies softmax and dropout.
+    - Produces a reprogrammed embedding for each patch, aligned with the LLM's embedding dimension.
+
+    Args:
+        d_model: Input dimension of patch embeddings
+        n_heads: Number of attention heads
+        d_keys: Dimension per head (optional, defaults to d_model // n_heads)
+        d_llm: LLM embedding dimension
+        attention_dropout: Dropout rate for attention weights
+
+    Shapes:
+        target_embedding: [B, L, d_model] (B=batch*n_vars, L=patches)
+        source_embedding: [S, d_llm] (S=num_tokens)
+        value_embedding: [S, d_llm]
+        Output: [B, L, d_llm]
+    """
+    def __init__(self, d_model, n_heads, d_keys=None, d_llm=None, attention_dropout=0.1):
+        super(ReprogrammingLayer, self).__init__()
+
+        d_keys = d_keys or (d_model // n_heads)
+
+        self.query_projection = nn.Linear(d_model, d_keys * n_heads)      # Projects patch embeddings to queries
+        self.key_projection = nn.Linear(d_llm, d_keys * n_heads)          # Projects LLM embeddings to keys
+        self.value_projection = nn.Linear(d_llm, d_keys * n_heads)        # Projects LLM embeddings to values
+        self.out_projection = nn.Linear(d_keys * n_heads, d_llm)          # Final projection to LLM embedding dim
+        self.n_heads = n_heads
+        self.dropout = nn.Dropout(attention_dropout)
+
+    def forward(self, target_embedding, source_embedding, value_embedding):
+        # target_embedding: [B, L, d_model]
+        # source_embedding: [S, d_llm]
+        # value_embedding: [S, d_llm]
+        B, L, _ = target_embedding.shape
+        S, _ = source_embedding.shape
+        H = self.n_heads
+
+        # Project and reshape for multi-head attention
+        target_embedding = self.query_projection(target_embedding).view(B, L, H, -1)      # [B, L, H, d_keys]
+        source_embedding = self.key_projection(source_embedding).view(S, H, -1)           # [S, H, d_keys]
+        value_embedding = self.value_projection(value_embedding).view(S, H, -1)           # [S, H, d_keys]
+
+        # Compute reprogrammed embeddings
+        out = self.reprogramming(target_embedding, source_embedding, value_embedding)      # [B, L, H, d_keys]
+        out = out.reshape(B, L, -1)                                                      # [B, L, H*d_keys]
+        return self.out_projection(out)                                                   # [B, L, d_llm]
+
+    def reprogramming(self, target_embedding, source_embedding, value_embedding):
+        # target_embedding (Query): [B, L, H, d_keys]
+        # source_embedding (Key): [S, H, d_keys]
+        # value_embedding (Value): [S, H, d_keys]
+        B, L, H, E = target_embedding.shape
+        scale = 1. / sqrt(E)
+
+        # Attention score (~ Q @ K): [B, H, L, S]
+        scores = torch.einsum("blhe,she->bhls", target_embedding, source_embedding)
+        # Softmax over source tokens (S), then dropout
+        A = self.dropout(torch.softmax(scale * scores, dim=-1))            # [B, H, L, S]
+        # Weighted sum of value embeddings (~ A @ V): [B, L, H, d_keys]
+        reprogramming_embedding = torch.einsum("bhls,she->blhe", A, value_embedding)
+        return reprogramming_embedding
 
 
 class Model(nn.Module):
@@ -45,7 +112,7 @@ class Model(nn.Module):
     - Generates prompts with time series statistics for LLM context
     - Output head projects LLM output to prediction window
     """
-    def __init__(self, configs, patch_len=16, stride=8):
+    def __init__(self, configs):
         super(Model, self).__init__()
         # Store key hyperparameters
         self.pred_len = configs.pred_len
@@ -53,7 +120,6 @@ class Model(nn.Module):
         self.d_ff = configs.d_ff
         # Make top_k robust: never greater than seq_len
         self.top_k = min(5, self.seq_len - 1)  # Number of lags to report in prompt
-        self.d_llm = configs.llm_dim
         self.patch_len = configs.patch_len
         self.stride = configs.stride
 
@@ -142,7 +208,7 @@ class Model(nn.Module):
             )
 
         # Set d_llm from the LLM's embedding dimension for robustness
-        self.d_llm = self.llm_model.get_input_embeddings().embedding_dim
+        self.d_llm = self.llm_model.get_input_embeddings().embedding_dim  # int
 
         # Load the tokenizer for the LLM
         try:
@@ -181,21 +247,22 @@ class Model(nn.Module):
         self.dropout = nn.Dropout(configs.dropout)
 
         # Patch embedding for time series input
-        self.patch_embedding = PatchEmbedding(
-            configs.d_model, self.patch_len, self.stride, configs.dropout)
+        # PatchEmbedding input: [batch, n_vars, seq_len] -> output: [batch * n_vars, num_patches, d_model], n_vars
+        self.patch_embedding = PatchEmbedding(configs.d_model, self.patch_len, self.stride, configs.dropout)
 
         # LLM word embeddings and mapping layer
-        self.word_embeddings = self.llm_model.get_input_embeddings().weight
+        self.word_embeddings = self.llm_model.get_input_embeddings().weight  # [vocab_size, d_llm]
         self.vocab_size = self.word_embeddings.shape[0]
         self.num_tokens = configs.num_tokens
+        # Mapping layer: projects vocab_size -> num_tokens
         self.mapping_layer = nn.Linear(self.vocab_size, self.num_tokens)
 
         # Reprogramming layer to adapt time series to LLM
         self.reprogramming_layer = ReprogrammingLayer(configs.d_model, configs.n_heads, self.d_ff, self.d_llm)
 
         # Calculate number of patches and head feature size
-        self.patch_nums = int((configs.seq_len - self.patch_len) / self.stride + 2)
-        self.head_nf = self.d_ff * self.patch_nums
+        self.patch_nums = int((configs.seq_len - self.patch_len) / self.stride + 2)  # int
+        self.head_nf = self.d_ff * self.patch_nums  # int
 
         # Output projection head (maps LLM output to prediction)
         self.output_projection = FlattenHead(configs.enc_in, self.head_nf, self.pred_len, head_dropout=configs.dropout)
@@ -213,17 +280,17 @@ class Model(nn.Module):
             output: [batch, pred_len, num_features]
         """
         # Normalize input
-        input_data = self.normalize_layers(input_data, 'norm')
+        input_data = self.normalize_layers(input_data, 'norm')  # [batch, seq_len, num_features]
         B, T, N = input_data.size()
         # Reshape to [B*N, T, 1] for per-feature processing
-        input_data = input_data.permute(0, 2, 1).contiguous().reshape(B * N, T, 1)
+        input_data = input_data.permute(0, 2, 1).contiguous().reshape(B * N, T, 1)  # [B*N, seq_len, 1]
         # Compute statistics for prompt
-        min_values = torch.min(input_data, dim=1)[0]
-        max_values = torch.max(input_data, dim=1)[0]
-        medians = torch.median(input_data, dim=1).values
-        lags = self.calcute_lags(input_data)
-        trends = input_data.diff(dim=1).sum(dim=1)
-        prompt = []
+        min_values = torch.min(input_data, dim=1)[0]  # [B*N, 1]
+        max_values = torch.max(input_data, dim=1)[0]  # [B*N, 1]
+        medians = torch.median(input_data, dim=1).values  # [B*N, 1]
+        lags = self.calcute_lags(input_data)  # [B*N, top_k]
+        trends = input_data.diff(dim=1).sum(dim=1)  # [B*N, 1]
+        prompt = [] # [B*N] (Room for improvement for the prompt)
         for b in range(input_data.shape[0]):
             min_values_str = str(min_values[b].tolist()[0])
             max_values_str = str(max_values[b].tolist()[0])
@@ -241,31 +308,31 @@ class Model(nn.Module):
             )
             prompt.append(prompt_)
         # Reshape back to [B, N, T] for patch embedding
-        input_data = input_data.reshape(B, N, T).permute(0, 2, 1).contiguous()
+        input_data = input_data.reshape(B, N, T).permute(0, 2, 1).contiguous()  # [B, seq_len, num_features]
         # Tokenize prompt and get embeddings
-        prompt = self.tokenizer(prompt, return_tensors="pt", padding=True, truncation=True, max_length=2048).input_ids
-        prompt_embeddings = self.llm_model.get_input_embeddings()(prompt.to(input_data.device))
+        prompt = self.tokenizer(prompt, return_tensors="pt", padding=True, truncation=True, max_length=2048).input_ids  # [B*N, prompt_len]
+        prompt_embeddings = self.llm_model.get_input_embeddings()(prompt.to(input_data.device))  # [B*N, prompt_len, d_llm]
         # Map LLM word embeddings to num_tokens
-        source_embeddings = self.mapping_layer(self.word_embeddings.permute(1, 0)).permute(1, 0)
+        source_embeddings = self.mapping_layer(self.word_embeddings.permute(1, 0)).permute(1, 0)  # [vocab_size, d_llm] -> [d_llm, vocab_size] -> [d_llm, num_tokens] -> [num_tokens, d_llm]
         # Patch embedding for time series
-        input_data = input_data.permute(0, 2, 1).contiguous()
-        enc_out, n_vars = self.patch_embedding(input_data.to(torch.bfloat16))
+        input_data = input_data.permute(0, 2, 1).contiguous()  # [B, num_features, seq_len]
+        enc_out, n_vars = self.patch_embedding(input_data.to(torch.bfloat16))  # enc_out: [B*n_vars, num_patches, d_model], n_vars: int
         # Reprogramming layer
-        enc_out = self.reprogramming_layer(enc_out, source_embeddings, source_embeddings)
+        enc_out = self.reprogramming_layer(enc_out, source_embeddings, source_embeddings)  # [B*n_vars, num_patches, d_llm]
         # Concatenate prompt and encoded input
-        llama_enc_out = torch.cat([prompt_embeddings, enc_out], dim=1)
+        llama_enc_out = torch.cat([prompt_embeddings, enc_out], dim=1)  # [B*N, prompt_len + num_patches, d_llm]
         # LLM forward pass
-        output = self.llm_model(inputs_embeds=llama_enc_out).last_hidden_state
-        output = output[:, :, :self.d_ff]
+        output = self.llm_model(inputs_embeds=llama_enc_out).last_hidden_state  # [B*N, prompt_len + num_patches, d_llm]
+        output = output[:, :, :self.d_ff]  # [B*N, prompt_len + num_patches, d_ff]
         # Reshape and project output
         output = torch.reshape(
-            output, (-1, n_vars, output.shape[-2], output.shape[-1]))
-        output = output.permute(0, 1, 3, 2).contiguous()
-        output = self.output_projection(output[:, :, :, -self.patch_nums:])
-        output = output.permute(0, 2, 1).contiguous()
+            output, (-1, n_vars, output.shape[-2], output.shape[-1]))  # [B, n_vars, prompt_len + num_patches, d_ff]
+        output = output.permute(0, 1, 3, 2).contiguous()  # [B, n_vars, d_ff, prompt_len + num_patches]
+        output = self.output_projection(output[:, :, :, -self.patch_nums:])  # [B, n_vars, pred_len]
+        output = output.permute(0, 2, 1).contiguous()  # [B, pred_len, n_vars]
         # Denormalize output
-        output = self.normalize_layers(output, 'denorm')
-        return output[:, -self.pred_len:, :]
+        output = self.normalize_layers(output, 'denorm')  # [B, pred_len, n_vars]
+        return output[:, -self.pred_len:, :]  # [B, pred_len, n_vars]
 
     def calcute_lags(self, x_enc):
         """
@@ -275,60 +342,10 @@ class Model(nn.Module):
         Returns:
             lags: [batch, top_k]
         """
-        q_fft = torch.fft.rfft(x_enc.permute(0, 2, 1).contiguous(), dim=-1)
-        k_fft = torch.fft.rfft(x_enc.permute(0, 2, 1).contiguous(), dim=-1)
-        res = q_fft * torch.conj(k_fft)
-        corr = torch.fft.irfft(res, dim=-1)
-        mean_value = torch.mean(corr, dim=1)
-        _, lags = torch.topk(mean_value, self.top_k, dim=-1)
+        q_fft = torch.fft.rfft(x_enc.permute(0, 2, 1).contiguous(), dim=-1)  # [batch, 1, freq]
+        k_fft = torch.fft.rfft(x_enc.permute(0, 2, 1).contiguous(), dim=-1)  # [batch, 1, freq]
+        res = q_fft * torch.conj(k_fft)  # [batch, 1, freq]
+        corr = torch.fft.irfft(res, dim=-1)  # [batch, 1, seq_len]
+        mean_value = torch.mean(corr, dim=1)  # [batch, seq_len]
+        _, lags = torch.topk(mean_value, self.top_k, dim=-1)  # [batch, top_k]
         return lags
-
-
-class ReprogrammingLayer(nn.Module):
-    def __init__(self, d_model, n_heads, d_keys=None, d_llm=None, attention_dropout=0.1):
-        super(ReprogrammingLayer, self).__init__()
-
-        d_keys = d_keys or (d_model // n_heads)
-
-        self.query_projection = nn.Linear(d_model, d_keys * n_heads)
-        self.key_projection = nn.Linear(d_llm, d_keys * n_heads)
-        self.value_projection = nn.Linear(d_llm, d_keys * n_heads)
-        self.out_projection = nn.Linear(d_keys * n_heads, d_llm)
-        self.n_heads = n_heads
-        self.dropout = nn.Dropout(attention_dropout)
-
-    def forward(self, target_embedding, source_embedding, value_embedding):
-        B, L, _ = target_embedding.shape
-        S, _ = source_embedding.shape
-        H = self.n_heads
-
-        target_embedding = self.query_projection(target_embedding).view(B, L, H, -1)
-        source_embedding = self.key_projection(source_embedding).view(S, H, -1)
-        value_embedding = self.value_projection(value_embedding).view(S, H, -1)
-
-        out = self.reprogramming(target_embedding, source_embedding, value_embedding)
-
-        out = out.reshape(B, L, -1)
-
-        return self.out_projection(out)
-
-    def reprogramming(self, target_embedding, source_embedding, value_embedding):
-        B, L, H, E = target_embedding.shape
-
-        scale = 1. / sqrt(E)
-
-        scores = torch.einsum("blhe,she->bhls", target_embedding, source_embedding)
-
-        A = self.dropout(torch.softmax(scale * scores, dim=-1))
-        reprogramming_embedding = torch.einsum("bhls,she->blhe", A, value_embedding)
-
-        return reprogramming_embedding
-
-# --- Saving Note ---
-# This model contains a frozen LLM loaded via HuggingFace Transformers.
-# torch.save(model) will NOT save the LLM weights (only references to them).
-# To save and reload the model safely:
-# 1. Save the model config and state_dict (torch.save(model.state_dict(), ...))
-# 2. Save the LLM separately using HuggingFace's save_pretrained() for both model and tokenizer.
-# 3. On reload, reconstruct the TimeLLM model, load the LLM and tokenizer with from_pretrained(),
-#    then load the state_dict for the rest of the model.
