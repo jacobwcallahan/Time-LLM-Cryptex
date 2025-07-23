@@ -17,7 +17,7 @@ os.environ["AWS_SECRET_ACCESS_KEY"] = "minioadmin"
 os.environ["MLFLOW_S3_ENDPOINT_URL"] = f"http://{MLFLOW_SERVER_IP}:9000"
 
 # Optuna
-OPTUNA_STUDY_NAME = "llama_study"
+llm_model = "GPT2"
 OPTUNA_STORAGE_PATH = f"sqlite:////mnt/nfs/mlflow/optuna_study.db"
 
 
@@ -65,10 +65,9 @@ def objective(trial):
     learning_rate = trial.suggest_float("learning_rate", 1e-5, 1e-2, log=True)
     
     # --- Static Parameters (won't be tuned in this study) ---
-    llm_model = "LLAMA"
+    # llm_model = "LLAMA" # Defined outside the function to be used in Optuna study name
     llm_layers = 8
     granularity = "daily"
-    task_name = "short_term_forecast"
     patch_len = 1
     stride = 1
     loss = "MSE"
@@ -86,9 +85,6 @@ def objective(trial):
         'daily': 'candlesticks-D.csv'
     }
     data_path = data_path_map[granularity]
-    
-    # Set label length
-    label_len = seq_len // 2
 
     # --- 3. Build and Launch the Experiment Command ---
     # This assembles the command to run your main training script.
@@ -100,7 +96,6 @@ def objective(trial):
         '--features', features,
         '--seq_len', str(seq_len),
         '--pred_len', str(pred_len),
-        '--label_len', str(label_len),
         '--llm_layers', str(llm_layers),
         '--d_model', str(d_model),
         '--learning_rate', str(learning_rate),
@@ -111,10 +106,6 @@ def objective(trial):
         '--metric', metric,
         # Static Parameters
         '--llm_model', llm_model,
-        '--task_name', task_name,
-        '--is_training', '1',
-        '--model_comment', f"optuna_trial_{trial.number}",
-        '--model', 'TimeLLM',
         '--data', 'CRYPTEX',
         '--root_path', './dataset/cryptex/',
         '--data_path', data_path,
@@ -125,8 +116,6 @@ def objective(trial):
         '--enc_in', '7',
         '--dec_in', '7',
         '--c_out', '7',
-        '--factor', '3',
-        '--itr', '1',
     ]
     
     print(f"\n--- Starting Trial {trial.number} ---\n{' '.join(cmd)}\n")
@@ -189,7 +178,7 @@ if __name__ == "__main__":
     # The 'study_name' will group your runs. If you restart the script, it will resume.
     # 'storage' tells Optuna to save results to a local SQLite database.
     study = optuna.create_study(
-        study_name=OPTUNA_STUDY_NAME,
+        study_name=f"{llm_model.lower()}_study",
         direction="minimize",  # We want to minimize validation loss/metric
         storage=OPTUNA_STORAGE_PATH,
         load_if_exists=True # Resume study if it already exists
@@ -212,4 +201,5 @@ if __name__ == "__main__":
     print("  Best Parameters: ")
     for key, value in trial.params.items():
         print(f"    {key}: {value}")
+
 
