@@ -17,7 +17,7 @@ os.environ["AWS_SECRET_ACCESS_KEY"] = "minioadmin"
 os.environ["MLFLOW_S3_ENDPOINT_URL"] = f"http://{MLFLOW_SERVER_IP}:9000"
 
 # Optuna
-llm_model = "GPT2"
+llm_model = "LLAMA"
 OPTUNA_STORAGE_PATH = f"sqlite:////mnt/nfs/mlflow/optuna_study.db"
 
 
@@ -55,22 +55,29 @@ def objective(trial):
     features = trial.suggest_categorical("features", ["M", "MS", "S"])
     seq_len = trial.suggest_categorical("seq_len", [14, 49, 91])
     pred_len = trial.suggest_categorical("pred_len", [1, 7])
-    num_tokens = trial.suggest_categorical("num_tokens", [100, 500])
+    num_tokens = trial.suggest_categorical("num_tokens", [100, 500, 1000])
+    loss = trial.suggest_categorical("loss", ["MSE", "MADL", "GMADL"])
+    lradj = trial.suggest_categorical("lradj", ["type1", "type2", "type3", "PEMS", "TST", "constant"])
 
     # Integer parameters: Optuna will choose an integer within the range.
-    # llm_layers = trial.suggest_int("llm_layers", 4, 12)
+    llm_layers = trial.suggest_int("llm_layers", 4, 12)
     d_model = trial.suggest_int("d_model", 16, 64, step=16) # Suggests 16, 32, 48, 64
-    
+    n_heads = trial.suggest_categorical("n_heads", [2, 4, 8, 16])
+    d_ff = trial.suggest_categorical("d_ff", [32, 64, 128, 256])
+    batch_size = trial.suggest_categorical("batch_size", [8, 16, 24, 32, 64])
+    patch_len = trial.suggest_categorical("patch_len", [1, 4, 8, 16])
+    stride = trial.suggest_categorical("stride", [1, 2, 4, 8])
+
+    # Float parameters
+    dropout = trial.suggest_float("dropout", 0.0, 0.5, step=0.1)
+    pct_start = trial.suggest_float("pct_start", 0.1, 0.5, step=0.1)
+
     # Logarithmic uniform parameters: Good for searching learning rates.
     learning_rate = trial.suggest_float("learning_rate", 1e-5, 1e-2, log=True)
-    
+
     # --- Static Parameters (won't be tuned in this study) ---
     # llm_model = "LLAMA" # Defined outside the function to be used in Optuna study name
-    llm_layers = 8
     granularity = "daily"
-    patch_len = 1
-    stride = 1
-    loss = "MSE"
     metric = "MAE"
     
     # --- Dynamic/Conditional Parameters ---
@@ -98,11 +105,17 @@ def objective(trial):
         '--pred_len', str(pred_len),
         '--llm_layers', str(llm_layers),
         '--d_model', str(d_model),
-        '--learning_rate', str(learning_rate),
-        '--num_tokens', str(num_tokens),
+        '--n_heads', str(n_heads),
+        '--d_ff', str(d_ff),
+        '--dropout', str(dropout),
         '--patch_len', str(patch_len),
         '--stride', str(stride),
+        '--batch_size', str(batch_size),
+        '--learning_rate', str(learning_rate),
+        '--num_tokens', str(num_tokens),
         '--loss', loss,
+        '--lradj', lradj,
+        '--pct_start', str(pct_start),
         '--metric', metric,
         # Static Parameters
         '--llm_model', llm_model,
@@ -111,11 +124,6 @@ def objective(trial):
         '--data_path', data_path,
         '--target', 'close',
         '--train_epochs', '10',
-        '--batch_size', '24',
-        '--d_ff', '128',
-        '--enc_in', '7',
-        '--dec_in', '7',
-        '--c_out', '7',
     ]
     
     print(f"\n--- Starting Trial {trial.number} ---\n{' '.join(cmd)}\n")
@@ -201,5 +209,4 @@ if __name__ == "__main__":
     print("  Best Parameters: ")
     for key, value in trial.params.items():
         print(f"    {key}: {value}")
-
 

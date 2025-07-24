@@ -18,13 +18,12 @@ class FlattenHead(nn.Module):
     Flattens the input tensor and applies a linear layer followed by dropout.
     Used as the final projection head for the model's output.
     Args:
-        n_vars: Number of variables (features)
         nf: Flattened feature dimension
         target_window: Output window size (prediction length)
         head_dropout: Dropout rate for the head
     """
-    def __init__(self, n_vars, nf, target_window, head_dropout=0):
-        #              enc_in, head_nf, pred_len, dropout
+    def __init__(self, nf, target_window, head_dropout=0):
+        #              head_nf, pred_len, dropout
         super().__init__()
         self.flatten = nn.Flatten(start_dim=-2)
         self.linear = nn.Linear(nf, target_window)
@@ -264,7 +263,7 @@ class Model(nn.Module):
         self.head_nf = self.d_ff * self.patch_nums  # int
 
         # Output projection head (maps LLM output to prediction)
-        self.output_projection = FlattenHead(configs.enc_in, self.head_nf, self.pred_len, head_dropout=configs.dropout)
+        self.output_projection = FlattenHead(self.head_nf, self.pred_len, head_dropout=configs.dropout)
 
         # Normalization layers for input/output
         self.normalize_layers = Normalize(configs.enc_in, affine=False)
