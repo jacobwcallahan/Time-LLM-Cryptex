@@ -16,3 +16,4 @@ optuna
 optuna-dashboard
 psycopg2-binary
 boto3
+backtesting
