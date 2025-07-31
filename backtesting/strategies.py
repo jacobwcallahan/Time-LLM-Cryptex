@@ -1,492 +1,245 @@
-from backtesting import Strategy
-import pandas as pd
+import backtrader as bt
 import numpy as np
 
-class SimpleAIStrategy(Strategy):
-    """
-    Simple strategy: Buy when AI predicts price increase, sell when decrease
-    """
-    # Default strategy parameters (can be optimized)
-    prediction_horizon = 1 # Which prediction to use (1, ..., `pred_len` days ahead)
-    confidence_threshold = 0.01 # Minimum price change % to trigger trade
+class BaseAIStrategy(bt.Strategy):
+    """Base strategy class with common AI prediction functionality"""
     
-    def init(self):
-        """Initialize strategy indicators and data"""
-        # Use self.I() to register predicted returns as an indicator.
-        # This prevents lookahead bias (data is revealed as the backtester moves forward in time).
-        pred_col = f'close_predicted_{self.prediction_horizon}'
-        if pred_col not in self.data.df.columns:
-            raise ValueError(f"Prediction column {pred_col} not found in data")
-
-        self.predicted_returns = self.I(
-            lambda predictions, close: predictions / close - 1, # Calculate predicted returns
-            self.data.df[pred_col],
-            self.data.Close,
-            name=f'Pred_Horizon_{self.prediction_horizon}'
-        )
-        """ # Something you can do to visualize the predictions:
-        self.visual = self.I(
-            lambda predictions: predictions.shift(int(self.prediction_horizon)),
-            self.data.df[pred_col],
-            name='Raw Predictions',
-            overlay=True
-        )
-        """
-        
-    def next(self):
-        """Execute strategy logic for each time step"""
-        # Skip if prediction is NaN
-        if pd.isna(self.predicted_returns[-1]):
-            return
-            
-        predicted_return = self.predicted_returns[-1]
-
-        # Simple long-only strategy
-        if predicted_return > self.confidence_threshold and not self.position:
-            self.buy()
-        elif predicted_return < -self.confidence_threshold and self.position:
-            self.position.close()
-
-
-class SLTPStrategy(Strategy):
-    """
-    Stop Loss Take Profit strategy that uses AI model predictions for trading decisions.
-    """
-    # Strategy parameters (can be optimized)
-    prediction_horizon = 1  # Which prediction to use (1, ..., `pred_len` days ahead)
-    confidence_threshold = 0.01  # Minimum price change % to trigger trade
-    stop_loss_pct = 0.05  # Stop loss percentage
-    take_profit_pct = 0.10  # Take profit percentage
+    params = (
+        ('prediction_horizon', 1), # Which prediction to use (1, ..., `pred_len` days ahead)
+        ('confidence_threshold', 0.01), # Minimum price change % to trigger trade
+        ('position_size', 0.95),  # Use 95% of available cash
+    )
     
-    def init(self):
-        """Initialize strategy indicators and data"""
-        pred_col = f'close_predicted_{self.prediction_horizon}'
+    def __init__(self):
+        # Add prediction data as lines
+        self.prediction = self.datas[0].close_predicted_1  # Default to horizon 1
+        
+        # Set the correct prediction horizon
+        horizon = self.params.prediction_horizon
+        if hasattr(self.datas[0], f'close_predicted_{horizon}'):
+            self.prediction = getattr(self.datas[0], f'close_predicted_{horizon}')
+        
+        # Trick to include raw predictions in the plot
+        pred_plot = bt.indicators.SimpleMovingAverage(self.prediction, period=1, plotname=f'Raw Prediction {self.params.prediction_horizon}')
+    
+    def get_prediction_signal(self):
+        """Get trading signal based on AI predictions"""
 
-        if pred_col not in self.data.df.columns:
-            raise ValueError(f"Prediction column {pred_col} not found in data")
+        current_price = self.data.close[0]
+        predicted_price = self.prediction[0]  # Get the predicted price for the next period
         
-        # Calculate predicted returns indicator
-        self.predicted_returns = self.I(
-            lambda predictions, close: predictions / close - 1, # Calculate predicted returns
-            self.data.df[pred_col],
-            self.data.Close,
-            name=f'Pred_Horizon_{self.prediction_horizon}'
-        )
+        if np.isnan(predicted_price):
+            return 0
         
+        # Calculate expected return
+        expected_return = (predicted_price - current_price) / current_price
+        
+        # Generate signal based on confidence threshold
+        if expected_return > self.params.confidence_threshold:
+            return 1  # Buy signal
+        elif expected_return < -self.params.confidence_threshold:
+            return -1  # Sell signal
+        else:
+            return 0  # Hold
+    
+    def get_position_size(self):
+        """Calculate position size based on available cash"""
+        cash = self.broker.get_cash()
+        price = self.data.close[0]
+        return int((cash * self.params.position_size) / price)
+
+class SimpleAIStrategy(BaseAIStrategy):
+    """Simple AI strategy that trades based on predictions"""
+    
     def next(self):
-        """Execute strategy logic for each time step"""
-        # Skip if prediction is NaN
-        if pd.isna(self.predicted_returns[-1]):
-            return
-            
-        current_price = self.data.Close[-1]
-        predicted_return = self.predicted_returns[-1]
+        signal = self.get_prediction_signal()
         
-        # If we are not in a position, check for entry signals
         if not self.position:
-            # Set stop-loss and take-profit levels based on the current price
-            upper_band = current_price * (1 + self.take_profit_pct)
-            lower_band = current_price * (1 - self.stop_loss_pct)
+            if signal == 1:  # Buy signal
+                size = self.get_position_size()
+                if size > 0:
+                    self.buy(size=size)
+        else:
+            if signal == -1:  # Sell signal
+                self.close()
 
-            # Long signal
-            if predicted_return > self.confidence_threshold:
-                self.buy(sl=lower_band, tp=upper_band) # Buy with stop-loss and take-profit
-                
-            # Short signal
-            elif predicted_return < -self.confidence_threshold:
-                # For short orders, the stop-loss is above the price
-                # and take-profit is below.
-                self.sell(sl=upper_band, tp=lower_band)
+class SLTPStrategy(BaseAIStrategy):
+    """AI strategy with stop loss and take profit"""
 
+    params = (
+        ('stop_loss_pct', 0.05),
+        ('take_profit_pct', 0.15),
+    )
 
-class MomentumAIStrategy(Strategy):
-    """
-    Momentum strategy: Combine AI predictions with price momentum
-    """
-    prediction_horizon = 1
-    confidence_threshold = 0.01
-    momentum_window = 5
-    
-    def init(self):
-        pred_col = f'close_predicted_{self.prediction_horizon}'
-
-        self.predicted_returns = self.I(
-            lambda predictions, close: predictions / close - 1,
-            self.data.df[pred_col],
-            self.data.Close,
-            name=f'Pred_Horizon_{self.prediction_horizon}'
-        )
-        
-        # Calculate momentum indicator
-        self.momentum = self.I(
-            lambda close: close.pct_change(self.momentum_window),
-            self.data.Close.s, # Pandas Series
-            name=f'Momentum_Window_{self.momentum_window}'
-        )
-    
-    def next(self):
-        if len(self.data) < self.momentum_window + 1 or pd.isna(self.predicted_returns[-1]):
-            return
-            
-        predicted_return = self.predicted_returns[-1]
-        momentum = self.momentum[-1]
-        
-        # Combine AI prediction with momentum
-        if (predicted_return > self.confidence_threshold and 
-            momentum > 0 and not self.position):
-            self.buy()
-        elif (predicted_return < -self.confidence_threshold or 
-              momentum < -0.02) and self.position:
-            self.position.close()
-
-
-class MultiHorizonStrategy(Strategy):
-    """
-    Strategy using multiple prediction horizons
-    """
-    short_horizon = 1
-    long_horizon = 5
-    confidence_threshold = 0.01
-    
-    def init(self):
-        short_col = f'close_predicted_{self.short_horizon}'
-        long_col = f'close_predicted_{self.long_horizon}'
-        
-        self.short_pred_returns = self.I(
-            lambda predictions, close: predictions / close - 1,
-            self.data.df[short_col],
-            self.data.Close,
-            name=f'Pred_Horizon_{self.short_horizon}'
-        )
-
-        self.long_pred_returns = self.I(
-            lambda predictions, close: predictions / close - 1,
-            self.data.df[long_col],
-            self.data.Close,
-            name=f'Pred_Horizon_{self.long_horizon}'
-        )
-    
-    def next(self):
-        if (len(self.data) < 2 or 
-            pd.isna(self.short_pred_returns[-1]) or 
-            pd.isna(self.long_pred_returns[-1])):
-            return
-            
-        short_pred = self.short_pred_returns[-1]
-        long_pred = self.long_pred_returns[-1]
-        
-        # Buy when both short and long term predictions are positive
-        if (short_pred > self.confidence_threshold and 
-            long_pred > self.confidence_threshold and not self.position):
-            self.buy()
-        elif (short_pred < -self.confidence_threshold or 
-              long_pred < -self.confidence_threshold) and self.position:
-            self.position.close()
-
-
-class VolumeAIStrategy(Strategy):
-    """
-    Strategy that combines AI predictions with volume analysis
-    """
-    prediction_horizon = 1
-    confidence_threshold = 0.01
-    volume_multiplier = 1.5  # Volume must be X times average
-    volume_window = 10
-    
-    def init(self):
-        pred_col = f'close_predicted_{self.prediction_horizon}'
-        self.predicted_returns = self.I(
-            lambda predictions, close: predictions / close - 1,
-            self.data.df[pred_col],
-            self.data.Close,
-            name=f'Pred_Horizon_{self.prediction_horizon}'
-        )
-        
-        # Calculate volume moving average
-        self.volume_ma = self.I(
-            lambda volume: volume.rolling(self.volume_window).mean(),
-            self.data.Volume.s, # Pandas Series
-            name=f'Volume_MA_{self.volume_window}'
-        )
-        
-    def next(self):
-        if len(self.data) < self.volume_window + 1 or pd.isna(self.predicted_returns[-1]):
-            return
-            
-        predicted_return = self.predicted_returns[-1]
-        current_volume = self.data.Volume[-1]
-        avg_volume = self.volume_ma[-1]
-        
-        # Only trade when volume is above average (confirms conviction)
-        volume_confirmed = current_volume > (avg_volume * self.volume_multiplier)
-        
-        if (predicted_return > self.confidence_threshold and 
-            volume_confirmed and not self.position):
-            self.buy()
-        elif (predicted_return < -self.confidence_threshold or
-              not volume_confirmed) and self.position:
-            self.position.close()
-
-
-class RSIAIStrategy(Strategy):
-    """
-    Strategy combining AI predictions with RSI indicator
-    """
-    prediction_horizon = 1
-    confidence_threshold = 0.01
-    rsi_period = 14
-    rsi_oversold = 30
-    rsi_overbought = 70
-    
-    def init(self):
-        pred_col = f'close_predicted_{self.prediction_horizon}'
-        self.predicted_returns = self.I(
-            lambda predictions, close: predictions / close - 1,
-            self.data.df[pred_col],
-            self.data.Close,
-            name=f'Pred_Horizon_{self.prediction_horizon}'
-        )
-        
-        self.rsi = self.I(self._calculate_rsi, self.data.Close.s, self.rsi_period, name='RSI')
-    
-    @staticmethod
-    def _calculate_rsi(close, period):
-        """Simple RSI calculation"""
-        delta = close.diff()
-        gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
-        loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
-        rs = gain / loss
-        return 100 - (100 / (1 + rs))
-    
-    def next(self):
-        if len(self.data) < self.rsi_period + 1 or pd.isna(self.predicted_returns[-1]):
-            return
-            
-        predicted_return = self.predicted_returns[-1]
-        current_rsi = self.rsi[-1]
-        
-        # Buy when AI predicts up move AND RSI shows oversold
-        if (predicted_return > self.confidence_threshold and 
-            current_rsi < self.rsi_oversold and not self.position):
-            self.buy()
-        # Sell when AI predicts down move OR RSI shows overbought
-        elif ((predicted_return < -self.confidence_threshold or 
-               current_rsi > self.rsi_overbought) and self.position):
-            self.position.close()
-
-
-class BollingerAIStrategy(Strategy):
-    """
-    Strategy using AI predictions with Bollinger Bands
-    """
-    prediction_horizon = 1
-    confidence_threshold = 0.01
-    bb_period = 20
-    bb_std = 2
-    
-    def init(self):
-        pred_col = f'close_predicted_{self.prediction_horizon}'
-        self.predicted_returns = self.I(
-            lambda predictions, close: predictions / close - 1,
-            self.data.df[pred_col],
-            self.data.Close,
-            name=f'Pred_Horizon_{self.prediction_horizon}'
-        )
-        
-        # Calculate Bollinger Bands
-        self.bb_middle = self.I(lambda close: close.rolling(self.bb_period).mean(), self.data.Close.s, name='BB_Middle')
-        bb_std_dev = self.I(lambda close: close.rolling(self.bb_period).std(), self.data.Close.s, name='BB_StdDev')
-        self.bb_upper = self.bb_middle + (bb_std_dev * self.bb_std)
-        self.bb_lower = self.bb_middle - (bb_std_dev * self.bb_std)
-        
-        # Calculate BB position (0 = lower band, 1 = upper band)
-        self.bb_position = self.I(
-            lambda close, lower, upper: (close - lower) / (upper - lower) if (upper - lower) != 0 else 0.5,
-            self.data.Close,
-            self.bb_lower,
-            self.bb_upper,
-            name='BB_Position'
-        )
-    
-    def next(self):
-        if len(self.data) < self.bb_period + 1 or pd.isna(self.predicted_returns[-1]):
-            return
-            
-        predicted_return = self.predicted_returns[-1]
-        bb_pos = self.bb_position[-1]
-        # current_price = self.data.Close[-1]
-        
-        # Buy when AI predicts up AND price near lower band (oversold)
-        if (predicted_return > self.confidence_threshold and 
-            bb_pos < 0.2 and not self.position):
-            self.buy()
-        # Sell when AI predicts down OR price near upper band (overbought)  
-        elif ((predicted_return < -self.confidence_threshold or 
-               bb_pos > 0.8) and self.position):
-            self.position.close()
-
-
-class ProbabilisticAIStrategy(Strategy):
-    """
-    Strategy using ensemble of predictions and probability-based decisions
-    """
-    prediction_horizons = [1, 2, 3]  # Use multiple horizons
-    min_confidence = 0.67  # Minimum fraction of predictions agreeing
-    magnitude_threshold = 0.01
-    
-    def init(self):
-        # Load predictions for different horizons
-        for horizon in self.prediction_horizons:
-            pred_col = f'close_predicted_{horizon}'
-            if pred_col in self.data.df.columns:
-                indicator = self.I(
-                    lambda predictions, close: predictions / close - 1,
-                    self.data.df[pred_col],
-                    self.data.Close,
-                    name=f'Pred_Horizon_{horizon}'
-                )
-                setattr(self, f'pred_returns_{horizon}', indicator)
+    def __init__(self):
+        super().__init__()
+        self.buy_price = None
 
     def next(self):
-        if len(self.data) < 2:
-            return
-            
-        # Count predictions for each direction
-        bullish_count = 0
-        bearish_count = 0
-        total_predictions = 0
-        avg_magnitude = 0
-        
-        for horizon in self.prediction_horizons:
-            indicator = getattr(self, f'pred_returns_{horizon}', None)
-            pred_return = indicator[-1]
-            if not pd.isna(pred_return):
-                total_predictions += 1
-                avg_magnitude += abs(pred_return)
-                if pred_return > self.magnitude_threshold:
-                    bullish_count += 1
-                elif pred_return < -self.magnitude_threshold:
-                    bearish_count += 1
-        
-        if total_predictions == 0:
-            return
-            
-        avg_magnitude /= total_predictions
-        bullish_confidence = bullish_count / total_predictions
-        bearish_confidence = bearish_count / total_predictions
-        
-        # Make trading decisions based on confidence
-        if (bullish_confidence >= self.min_confidence and 
-            avg_magnitude > self.magnitude_threshold and not self.position):
-            self.buy()
-        elif (bearish_confidence >= self.min_confidence and self.position):
-            self.position.close()
+        signal = self.get_prediction_signal()
+        current_price = self.data.close[0]
 
+        if not self.position:
+            if signal == 1:
+                size = self.get_position_size()
+                if size > 0:
+                    self.buy(size=size)
+                    self.buy_price = current_price
+        else:
+            # Check stop loss and take profit
+            loss_pct = (self.buy_price - current_price) / self.buy_price
+            profit_pct = (current_price - self.buy_price) / self.buy_price
 
-class MeanReversionAIStrategy(Strategy):
-    """
-    Mean reversion strategy using AI predictions
-    """
-    prediction_horizon = 1
-    lookback_period = 20
-    mean_reversion_threshold = 2.0  # Standard deviations from mean
-    confidence_threshold = 0.01
+            if loss_pct >= self.params.stop_loss_pct or profit_pct >= self.params.take_profit_pct:
+                self.close()
+                self.buy_price = None
+
+class MomentumAIStrategy(BaseAIStrategy):
+    """AI strategy combined with momentum indicator"""
     
-    def init(self):
-        pred_col = f'close_predicted_{self.prediction_horizon}'
-        self.predicted_returns = self.I(
-            lambda predictions, close: predictions / close - 1,
-            self.data.df[pred_col],
-            self.data.Close,
-            name=f'Pred_Horizon_{self.prediction_horizon}'
-        )
-        
-        # Calculate rolling mean and std
-        self.price_mean = self.I(
-            lambda close: close.rolling(self.lookback_period).mean(),
-            self.data.Close.s,
-            name=f'Price_Mean_Rolling_{self.lookback_period}'
-        )
-        self.price_std = self.I(
-            lambda close: close.rolling(self.lookback_period).std(),
-            self.data.Close.s,
-            name=f'Price_StdDev_Rolling_{self.lookback_period}'
-        )
-        
-        # Z-score (how many std devs from mean)
-        self.z_score = self.I(
-            lambda close, mean, std: (close - mean) / std if std != 0 else 0,
-            self.data.Close,
-            self.price_mean,
-            self.price_std,
-            name=f'Z_Score_Rolling_{self.lookback_period}'
-        )
+    params = (
+        ('momentum_window', 20),
+    )
+    
+    def __init__(self):
+        super().__init__()
+        self.momentum = bt.indicators.Momentum(self.data.close, period=self.params.momentum_window)
     
     def next(self):
-        if len(self.data) < self.lookback_period + 1 or pd.isna(self.predicted_returns[-1]):
-            return
-            
-        predicted_return = self.predicted_returns[-1]
-        current_z = self.z_score[-1]
+        signal = self.get_prediction_signal()
         
-        # Buy when price is oversold (negative z-score) AND AI predicts recovery
-        if (current_z < -self.mean_reversion_threshold and 
-            predicted_return > self.confidence_threshold and not self.position):
-            self.buy()
-        # Sell when price reverts to mean or AI predicts decline
-        elif ((current_z > 0 or predicted_return < -self.confidence_threshold) 
-              and self.position):
-            self.position.close()
+        # Only trade if momentum aligns with prediction
+        momentum_positive = self.momentum[0] > 0
+        
+        if not self.position:
+            if signal == 1 and momentum_positive:
+                size = self.get_position_size()
+                if size > 0:
+                    self.buy(size=size)
+        else:
+            if signal == -1 or not momentum_positive:
+                self.close()
 
-
-class TrendFollowingAIStrategy(Strategy):
-    """
-    Trend following strategy enhanced with AI predictions
-    """
-    prediction_horizon = 1
-    confidence_threshold = 0.01
-    ema_short = 12
-    ema_long = 26
+class RSIAIStrategy(BaseAIStrategy):
+    """AI strategy combined with RSI"""
     
-    def init(self):
-        pred_col = f'close_predicted_{self.prediction_horizon}'
-        self.predicted_returns = self.I(
-            lambda predictions, close: predictions / close - 1,
-            self.data.df[pred_col],
-            self.data.Close,
-            name=f'Pred_Horizon_{self.prediction_horizon}'
-        )
-        
-        # Calculate EMAs for trend identification
-        self.ema_short_line = self.I(
-            lambda close: close.ewm(span=self.ema_short).mean(),
-            self.data.Close.s,
-            name=f'EMA_Short_{self.ema_short}'
-        )
-        self.ema_long_line = self.I(
-            lambda close: close.ewm(span=self.ema_long).mean(),
-            self.data.Close.s,
-            name=f'EMA_Long_{self.ema_long}'
-        )
-        
-        # Trend strength
-        self.trend_strength = (self.ema_short_line - self.ema_long_line) / self.ema_long_line
+    params = (
+        ('rsi_period', 14),
+        ('rsi_oversold', 30),
+        ('rsi_overbought', 70),
+    )
+    
+    def __init__(self):
+        super().__init__()
+        self.rsi = bt.indicators.RSI(self.data.close, period=self.params.rsi_period)
     
     def next(self):
-        if len(self.data) < max(self.ema_short, self.ema_long) + 1:
-            return
-            
-        if pd.isna(self.predicted_returns[-1]):
-            return
-            
-        predicted_return = self.predicted_returns[-1]
-        trend_strength = self.trend_strength[-1]
+        signal = self.get_prediction_signal()
+        rsi_value = self.rsi[0]
         
-        # Buy when uptrend confirmed by both EMA and AI
-        if (trend_strength > 0 and 
-            predicted_return > self.confidence_threshold and not self.position):
-            self.buy()
-        # Sell when downtrend or AI predicts decline
-        elif ((trend_strength < 0 or predicted_return < -self.confidence_threshold) 
-              and self.position):
-            self.position.close()
+        if not self.position:
+            # Buy if AI predicts up and RSI not overbought
+            if signal == 1 and rsi_value < self.params.rsi_overbought:
+                size = self.get_position_size()
+                if size > 0:
+                    self.buy(size=size)
+        else:
+            # Sell if AI predicts down or RSI overbought
+            if signal == -1 or rsi_value > self.params.rsi_overbought:
+                self.close()
+
+class BollingerAIStrategy(BaseAIStrategy):
+    """AI strategy combined with Bollinger Bands"""
+    
+    params = (
+        ('bb_period', 20),
+        ('bb_std', 2.0),
+    )
+    
+    def __init__(self):
+        super().__init__()
+        self.bb = bt.indicators.BollingerBands(self.data.close, 
+                                               period=self.params.bb_period,
+                                               devfactor=self.params.bb_std)
+    
+    def next(self):
+        signal = self.get_prediction_signal()
+        price = self.data.close[0]
+        
+        if not self.position:
+            # Buy if AI predicts up and price near lower band
+            if signal == 1 and price <= self.bb.lines.bot[0]:
+                size = self.get_position_size()
+                if size > 0:
+                    self.buy(size=size)
+        else:
+            # Sell if AI predicts down or price near upper band
+            if signal == -1 or price >= self.bb.lines.top[0]:
+                self.close()
+
+class MeanReversionAIStrategy(BaseAIStrategy):
+    """Mean reversion strategy with AI predictions"""
+    
+    params = (
+        ('lookback_period', 20),
+        ('mean_reversion_threshold', 1.5),
+    )
+    
+    def __init__(self):
+        super().__init__()
+        self.sma = bt.indicators.SMA(self.data.close, period=self.params.lookback_period)
+        self.std = bt.indicators.StandardDeviation(self.data.close, period=self.params.lookback_period)
+    
+    def next(self):
+        signal = self.get_prediction_signal()
+        price = self.data.close[0]
+        
+        if len(self.sma) < 1:
+            return
+        
+        mean = self.sma[0]
+        std = self.std[0]
+        
+        # Check if price is far from mean
+        z_score = abs(price - mean) / std if std > 0 else 0
+        
+        if not self.position:
+            # Buy if AI predicts up and price below mean
+            if signal == 1 and price < mean and z_score > self.params.mean_reversion_threshold:
+                size = self.get_position_size()
+                if size > 0:
+                    self.buy(size=size)
+        else:
+            # Sell if price returns to mean or AI predicts down
+            if signal == -1 or z_score < 0.5:
+                self.close()
+
+class TrendFollowingAIStrategy(BaseAIStrategy):
+    """Trend following strategy with AI predictions"""
+    
+    params = (
+        ('ema_short', 5),
+        ('ema_long', 20),
+    )
+    
+    def __init__(self):
+        super().__init__()
+        self.ema_short = bt.indicators.EMA(self.data.close, period=self.params.ema_short)
+        self.ema_long = bt.indicators.EMA(self.data.close, period=self.params.ema_long)
+    
+    def next(self):
+        signal = self.get_prediction_signal()
+        
+        # Check trend direction
+        trend_up = self.ema_short[0] > self.ema_long[0]
+        
+        if not self.position:
+            # Buy if AI predicts up and trend is up
+            if signal == 1 and trend_up:
+                size = self.get_position_size()
+                if size > 0:
+                    self.buy(size=size)
+        else:
+            # Sell if AI predicts down or trend changes
+            if signal == -1 or not trend_up:
+                self.close()
