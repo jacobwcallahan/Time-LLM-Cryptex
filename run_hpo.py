@@ -17,7 +17,8 @@ os.environ["AWS_SECRET_ACCESS_KEY"] = "minioadmin"
 os.environ["MLFLOW_S3_ENDPOINT_URL"] = f"http://{MLFLOW_SERVER_IP}:9000"
 
 # Optuna
-llm_model = "LLAMA"
+llm_model = "LLAMA3.1"
+N_TRIALS = 50
 OPTUNA_STORAGE_PATH = f"sqlite:////mnt/nfs/mlflow/optuna_study.db"
 
 
@@ -53,8 +54,8 @@ def objective(trial):
     
     # Categorical parameters: Optuna will choose from the list.
     features = trial.suggest_categorical("features", ["M", "MS", "S"])
-    seq_len = trial.suggest_categorical("seq_len", [14, 49, 91])
-    pred_len = trial.suggest_categorical("pred_len", [1, 7])
+    seq_len = trial.suggest_categorical("seq_len", [14, 49, 91, 168])
+    pred_len = trial.suggest_categorical("pred_len", [2, 7, 14])
     num_tokens = trial.suggest_categorical("num_tokens", [100, 500, 1000])
     loss = trial.suggest_categorical("loss", ["MSE", "MADL", "GMADL"])
     lradj = trial.suggest_categorical("lradj", ["type1", "type2", "type3", "PEMS", "TST", "constant"])
@@ -65,8 +66,8 @@ def objective(trial):
     n_heads = trial.suggest_categorical("n_heads", [2, 4, 8, 16])
     d_ff = trial.suggest_categorical("d_ff", [32, 64, 128, 256])
     batch_size = trial.suggest_categorical("batch_size", [8, 16, 24, 32, 64])
-    patch_len = trial.suggest_categorical("patch_len", [1, 4, 8, 16])
-    stride = trial.suggest_categorical("stride", [1, 2, 4, 8])
+    patch_len = trial.suggest_categorical("patch_len", [4, 8, 16, 32])
+    stride = trial.suggest_categorical("stride", [1, 4, 8])
 
     # Float parameters
     dropout = trial.suggest_float("dropout", 0.0, 0.5, step=0.1)
@@ -78,7 +79,7 @@ def objective(trial):
     # --- Static Parameters (won't be tuned in this study) ---
     # llm_model = "LLAMA" # Defined outside the function to be used in Optuna study name
     granularity = "daily"
-    metric = "MAE"
+    metric = "MDA"
     
     # --- Dynamic/Conditional Parameters ---
     # Generate a unique model_id for each trial
@@ -194,7 +195,7 @@ if __name__ == "__main__":
     
     # 'n_trials' is the total number of experiments you want to run.
     # Optuna will intelligently choose the parameters for these runs.
-    study.optimize(objective, n_trials=50)
+    study.optimize(objective, n_trials=N_TRIALS)
 
     # --- 6. Print the Results ---
     print("\n--- Hyperparameter Optimization Finished ---")

@@ -227,7 +227,7 @@ def run_training(args, accelerator):
             else:
                 accelerator.print(f'Updating learning rate to {scheduler.get_last_lr()[0]}')
 
-        # After training, log model and scaler to MLflow if enabled and on main process
+        # After training, log model to MLflow if enabled and on main process
         accelerator.wait_for_everyone()
         if enable_mlflow and accelerator.is_main_process:
             # Unwrap the model to save the raw state_dict
@@ -237,18 +237,9 @@ def run_training(args, accelerator):
                 k: v for k, v in unwrapped_model.state_dict().items()
                 if unwrapped_model.get_parameter(k).requires_grad
             }
-            mlflow.pytorch.log_state_dict(state_dict, artifact_path="model_state_dict")
+            mlflow.pytorch.log_state_dict(state_dict, artifact_path=None)
             accelerator.print(f"Model '{args.model_id}' has been logged to MLflow.")
-            # Save scaler for inference
-            import pickle
-            import tempfile
-            scaler = train_data.scaler if hasattr(train_data, 'scaler') else None  # StandardScaler or None
-            if scaler is not None:
-                with tempfile.NamedTemporaryFile(mode='wb', suffix=".pkl", delete=False) as tmp:
-                    pickle.dump(scaler, tmp)
-                    mlflow.log_artifact(tmp.name, "scaler.pkl")
-                os.remove(tmp.name)
-                accelerator.print(f"Scaler has been logged to MLflow.")
+            
             # Clean up temporary early stopping checkpoints
             if os.path.exists(temp_checkpoint_path):
                 shutil.rmtree(temp_checkpoint_path)

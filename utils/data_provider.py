@@ -2,7 +2,6 @@ import os
 import numpy as np
 import pandas as pd
 from torch.utils.data import Dataset, DataLoader
-from sklearn.preprocessing import StandardScaler
 
 class Dataset_Crypto(Dataset):
     """
@@ -10,7 +9,7 @@ class Dataset_Crypto(Dataset):
     size: [seq_len, pred_len] must be provided (defaults handled by argument parser)
     """
     def __init__(self, root_path, data_path='candlesticks-D.csv', flag='train', 
-                 size=None, features='MS', target='close', percent=100, scale=True):
+                 size=None, features='MS', target='close', percent=100):
         assert size is not None, 'size (seq_len, pred_len) must be provided.'
         self.seq_len = size[0]  # Length of input sequence
         self.pred_len = size[1] # Length of prediction sequence
@@ -20,7 +19,6 @@ class Dataset_Crypto(Dataset):
 
         self.features = features  # Feature selection mode: 'M', 'S', or 'MS'
         self.target = target      # Target column name
-        self.scale = scale        # Whether to scale features
         self.percent = percent    # Percentage of training data to use
 
         self.root_path = root_path  # Root directory for data
@@ -32,8 +30,6 @@ class Dataset_Crypto(Dataset):
         self.tot_len = len(self.data_x) - (self.seq_len + self.pred_len - 1)
 
     def __read_data__(self):
-        # Initialize scaler for normalization
-        self.scaler = StandardScaler()
         df_raw = pd.read_csv(os.path.join(self.root_path, self.data_path))
 
         # Always put target as last column (except timestamp)
@@ -62,13 +58,7 @@ class Dataset_Crypto(Dataset):
         elif self.features == 'S':
             df_data = df_raw[[self.target]]
 
-        # Fit scaler on training data and transform all data
-        if self.scale:
-            train_data = df_data[border1s[0]:border2s[0]]
-            self.scaler.fit(train_data.values)
-            data = self.scaler.transform(df_data.values)
-        else:
-            data = df_data.values
+        data = df_data.values
 
         # Store the processed data for this split
         self.data_x = data[border1:border2]
@@ -89,9 +79,6 @@ class Dataset_Crypto(Dataset):
         # Total number of samples = number of possible windows * number of features
         return (len(self.data_x) - self.seq_len - self.pred_len + 1) * self.num_features
 
-    def inverse_transform(self, data):
-        # Inverse transform for predictions (to original scale)
-        return self.scaler.inverse_transform(data)
 
 
 def data_provider(args, flag):
@@ -106,7 +93,6 @@ def data_provider(args, flag):
         features=args.features,
         target=args.target,
         percent=args.percent,
-        scale=True
     )
 
     shuffle_flag = flag != 'test' # Shuffle for train/val, no shuffle for test
