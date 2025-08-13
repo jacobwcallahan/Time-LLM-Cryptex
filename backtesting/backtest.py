@@ -159,6 +159,7 @@ class BacktestRunner:
         # Set cash and commission
         cerebro.broker.setcash(self.cash)
         cerebro.broker.setcommission(commission=self.commission)
+        cerebro.broker.set_coc(True) # Set cheat-on-close to execute orders on same candle close
         
         # Add analyzers
         cerebro.addanalyzer(bt.analyzers.Returns, _name='returns')
@@ -219,6 +220,7 @@ class BacktestRunner:
         # Set cash and commission
         cerebro.broker.setcash(self.cash)
         cerebro.broker.setcommission(commission=self.commission)
+        cerebro.broker.set_coc(True) # Set cheat-on-close to execute orders on same candle close
         
         # Add analyzers
         cerebro.addanalyzer(bt.analyzers.Returns, _name='returns')
@@ -399,6 +401,7 @@ class BacktestRunner:
             cerebro_opt.adddata(train_feed)
             cerebro_opt.broker.setcash(self.cash)
             cerebro_opt.broker.setcommission(commission=self.commission)
+            cerebro_opt.broker.set_coc(True) # Set cheat-on-close to execute orders on same candle close
             cerebro_opt.addanalyzer(bt.analyzers.SharpeRatio, _name='sharpe')
             cerebro_opt.addanalyzer(bt.analyzers.Returns, _name='returns')
             
@@ -528,8 +531,8 @@ def main():
     parser.add_argument('--data', required=True, help='Path to CSV file with AI predictions')
     parser.add_argument('--strategy', help='Specific strategy to run (default: all)')
     parser.add_argument('--optimize', help='Strategy to optimize')
-    parser.add_argument('--cash', type=float, default=100000, help='Initial cash (default: 100000)')
-    parser.add_argument('--commission', type=float, default=0.001, help='Commission rate (default: 0.001)')
+    parser.add_argument('--cash', type=float, default=1000, help='Initial cash')
+    parser.add_argument('--commission', type=float, default=0.001, help='Commission rate')
     parser.add_argument('--walk_forward', help='Strategy for walk-forward optimization')
     parser.add_argument('--train_days', type=int, default=60, help='Training days for walk-forward')
     parser.add_argument('--test_days', type=int, default=30, help='Test days for walk-forward')

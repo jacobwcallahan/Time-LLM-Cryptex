@@ -122,7 +122,8 @@ Inside `./backtesting`, and using the resulting inference file, run:
 python backtest.py --data <path_to_csv>
 ```
 To run a backtest on all implemented strategies in `strategies.py`.
-You can add the following flags followed by the name of a strategy (as defined in the `STRATEGIES` dictionary in `backtest.py`):
+
+You can add the flags below followed by the name of a strategy (as defined in the `STRATEGIES` dictionary in `backtest.py`, which is also where you'd want to change strategy parameters):
 - `--strategy` to run backtestin on a specific strategy
 - `--optimize` to do a strategy parameter search with ranges specified in `OPTIMIZATION_RANGES` in `backtest.py`
 - `--walk_forward` to do walk forward optimization with the same parameter ranges

@@ -7,7 +7,7 @@ class BaseAIStrategy(bt.Strategy):
     params = (
         ('prediction_horizon', 1), # Which prediction to use (1, ..., `pred_len` days ahead)
         ('confidence_threshold', 0.01), # Minimum price change % to trigger trade
-        ('position_size', 0.95),  # Use 95% of available cash
+        ('position_size', 0.99),  # Percent of available cash to use
     )
     
     def __init__(self):
@@ -46,7 +46,8 @@ class BaseAIStrategy(bt.Strategy):
         """Calculate position size based on available cash"""
         cash = self.broker.get_cash()
         price = self.data.close[0]
-        return int((cash * self.params.position_size) / price)
+        size = (cash / price) * self.params.position_size
+        return round(size, 8)
 
 class SimpleAIStrategy(BaseAIStrategy):
     """Simple AI strategy that trades based on predictions"""
