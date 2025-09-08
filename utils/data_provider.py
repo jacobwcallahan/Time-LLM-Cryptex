@@ -104,3 +104,45 @@ def data_provider(args, flag):
         drop_last=True # Ensures full batches only
     )
     return dataset, data_loader 
+
+def convert_to_returns(data, log_returns=False):
+    """
+    Convert data to returns.
+
+    args:
+        data: pandas DataFrame with "close" and "volume" columns
+        log_returns: bool, if True, the data is converted to log returns
+    returns:
+        pandas DataFrame with "returns" and "volume" columns
+    """
+    data = pd.DataFrame({"close": data["close"], "volume": data["volume"], "timestamp": data["timestamp"]})
+    if log_returns:
+        data["returns"] = np.log(data["close"] / data["close"].shift(1))
+    else:
+        data["returns"] = data["close"] / data["close"].shift(1) - 1
+    data = data.drop("close", axis=1).dropna().reset_index(drop=True)
+
+    data = data[["timestamp", "returns", "volume"]]
+
+    return data
+
+def aggregate_data(data, multiple):
+    """
+    Aggregate data to a given granularity.
+    For example, if multiple=4, aggregate every 4 rows into 1 row.
+    """
+    # Group data by chunks of 'multiple' size
+    grouped = data.groupby(data.index // multiple)
+    
+    # Aggregate each group
+    new_data = pd.DataFrame()
+    if "returns" in data.columns:
+        raise ValueError("Cannot aggregate data with returns. Convert to returns after aggregation.")
+    new_data['timestamp'] = grouped['timestamp'].first()
+    new_data['open'] = grouped['open'].first()
+    new_data['high'] = grouped['high'].max()
+    new_data['low'] = grouped['low'].min()
+    new_data['close'] = grouped['close'].last()
+    new_data['volume'] = grouped['volume'].sum()
+    
+    return new_data

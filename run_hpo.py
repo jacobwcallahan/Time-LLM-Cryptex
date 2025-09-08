@@ -18,7 +18,7 @@ os.environ["MLFLOW_S3_ENDPOINT_URL"] = f"http://{MLFLOW_SERVER_IP}:9000"
 
 # Optuna
 llm_model = "LLAMA3.1"
-N_TRIALS = 50
+N_TRIALS = 1
 OPTUNA_STORAGE_PATH = f"sqlite:////mnt/nfs/mlflow/optuna_study.db"
 
 
