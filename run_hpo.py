@@ -5,6 +5,7 @@ import mlflow
 import uuid
 import time
 import os
+import argparse
 
 # --- Centralized Configuration ---
 MLFLOW_SERVER_IP = "192.168.1.103"
@@ -19,7 +20,12 @@ os.environ["MLFLOW_S3_ENDPOINT_URL"] = f"http://{MLFLOW_SERVER_IP}:9000"
 # Optuna
 llm_model = "LLAMA3.1"
 N_TRIALS = 1
-OPTUNA_STORAGE_PATH = f"sqlite:////mnt/nfs/mlflow/optuna_study.db"
+OPTUNA_STORAGE_PATH = f"sqlite:////data-fast/nfs/mlflow/optuna_study.db"
+
+def parse_args():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--gpu', type=str, default='1', help='If not GPU 1, changes OPTUNA_STORAGE_PATH. Also assigns MLFLOW_SERVER_IP')
+    return parser.parse_args()
 
 
 # Helper function
@@ -55,7 +61,7 @@ def objective(trial):
     # Categorical parameters: Optuna will choose from the list.
     features = trial.suggest_categorical("features", ["M", "MS", "S"])
     seq_len = trial.suggest_categorical("seq_len", [14, 49, 91, 168])
-    pred_len = trial.suggest_categorical("pred_len", [2, 7, 14])
+    pred_len = trial.suggest_categorical("pred_len", [7, 14, 21, 28])  # Multiple values for optimization
     num_tokens = trial.suggest_categorical("num_tokens", [100, 500, 1000])
     loss = trial.suggest_categorical("loss", ["MSE", "MADL", "GMADL"])
     lradj = trial.suggest_categorical("lradj", ["type1", "type2", "type3", "PEMS", "TST", "constant"])
@@ -78,7 +84,8 @@ def objective(trial):
 
     # --- Static Parameters (won't be tuned in this study) ---
     # llm_model = "LLAMA" # Defined outside the function to be used in Optuna study name
-    granularity = "daily"
+    granularity = "weekly"
+    returns = False
     metric = "MDA"
     
     # --- Dynamic/Conditional Parameters ---
@@ -90,7 +97,8 @@ def objective(trial):
     data_path_map = {
         'hourly': 'candlesticks-h.csv',
         'minute': 'candlesticks-Min.csv',
-        'daily': 'candlesticks-D.csv'
+        'daily': 'candlesticks-D.csv',
+        'weekly': 'candlesticks-W.csv'
     }
     data_path = data_path_map[granularity]
 
@@ -183,11 +191,23 @@ def objective(trial):
 
 
 if __name__ == "__main__":
+
+
+    args = parse_args()
+    if args.gpu != '1':
+        OPTUNA_STORAGE_PATH = f"sqlite:////mnt/nfs/mlflow/optuna_study.db"
+    if args.gpu == '2':
+        MLFLOW_SERVER_IP = "192.168.1.104"
+    if args.gpu == '3':
+        MLFLOW_SERVER_IP = "192.168.1.105"
+    if args.gpu == '4':
+        MLFLOW_SERVER_IP = "192.168.1.106"
+
     # --- 5. Create and Run the Optuna Study ---
     # The 'study_name' will group your runs. If you restart the script, it will resume.
     # 'storage' tells Optuna to save results to a local SQLite database.
     study = optuna.create_study(
-        study_name=f"{llm_model.lower()}_study",
+        study_name=f"{llm_model.lower()}_study-FALL-v2",  # New study name to avoid conflicts
         direction="minimize",  # We want to minimize validation loss/metric
         storage=OPTUNA_STORAGE_PATH,
         load_if_exists=True # Resume study if it already exists
