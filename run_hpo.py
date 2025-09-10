@@ -147,7 +147,11 @@ def objective(trial):
     
     try:
         # Launch the subprocess
-        subprocess.run(cmd, check=True, text=True, capture_output=True)
+        process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        for line in process.stdout:
+            print(line, end="")  # stream live
+        process.wait()
+
         
         # After the run completes, find it in MLflow
         time.sleep(2) # Give MLflow a moment to log everything
