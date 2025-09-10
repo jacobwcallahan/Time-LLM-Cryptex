@@ -96,6 +96,7 @@ def data_provider(args, flag):
     )
 
     shuffle_flag = flag != 'test' # Shuffle for train/val, no shuffle for test
+    
     data_loader = DataLoader(
         dataset,
         batch_size=args.batch_size,
@@ -103,6 +104,7 @@ def data_provider(args, flag):
         num_workers=args.num_workers,
         drop_last=True # Ensures full batches only
     )
+
     return dataset, data_loader 
 
 def convert_to_returns(data, log_returns=False):

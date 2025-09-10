@@ -112,7 +112,7 @@ class Model(nn.Module):
     - Generates prompts with time series statistics for LLM context
     - Output head projects LLM output to prediction window
     """
-    def __init__(self, configs):
+    def __init__(self, configs, inference=False):
         super(Model, self).__init__()
         # Store key hyperparameters
         self.pred_len = configs.pred_len
@@ -122,6 +122,7 @@ class Model(nn.Module):
         self.top_k = min(5, self.seq_len - 1)  # Number of lags to report in prompt
         self.patch_len = configs.patch_len
         self.stride = configs.stride
+        self.inference = inference
 
         # Define supported LLM model configurations
         self.model_configs = {
@@ -317,8 +318,8 @@ class Model(nn.Module):
         try:
             enc_out, n_vars = self.patch_embedding(input_data)  # enc_out: [B*n_vars, num_patches, d_model], n_vars: int
         except Exception as e:
-            raise ValueError(f"Input: {print(input_data.dtype)}\n{print(e)}\n{print(input_data.shape)}\nInput data must be float.\n\n{e}")
             enc_out, n_vars = self.patch_embedding(input_data.to(torch.bfloat16))  # enc_out: [B*n_vars, num_patches, d_model], n_vars: int
+            print("\n\nConverting input data to bfloat16...\n\n")
         # Reprogramming layer
         enc_out = self.reprogramming_layer(enc_out, source_embeddings, source_embeddings)  # [B*n_vars, num_patches, d_llm]
         # Concatenate prompt and encoded input

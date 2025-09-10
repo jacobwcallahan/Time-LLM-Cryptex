@@ -192,16 +192,15 @@ def objective(trial):
 
 if __name__ == "__main__":
 
-
     args = parse_args()
     if args.gpu != '1':
         OPTUNA_STORAGE_PATH = f"sqlite:////mnt/nfs/mlflow/optuna_study.db"
-    if args.gpu == '2':
+    """if args.gpu == '2':
         MLFLOW_SERVER_IP = "192.168.1.104"
     if args.gpu == '3':
         MLFLOW_SERVER_IP = "192.168.1.105"
     if args.gpu == '4':
-        MLFLOW_SERVER_IP = "192.168.1.106"
+        MLFLOW_SERVER_IP = "192.168.1.106"""
 
     # --- 5. Create and Run the Optuna Study ---
     # The 'study_name' will group your runs. If you restart the script, it will resume.
@@ -210,7 +209,8 @@ if __name__ == "__main__":
         study_name=f"{llm_model.lower()}_study-FALL-v2",  # New study name to avoid conflicts
         direction="minimize",  # We want to minimize validation loss/metric
         storage=OPTUNA_STORAGE_PATH,
-        load_if_exists=True # Resume study if it already exists
+        load_if_exists=True, # Resume study if it already exists
+        pruner=optuna.pruners.NopPruner() # No pruning for testing
     )
     
     # 'n_trials' is the total number of experiments you want to run.

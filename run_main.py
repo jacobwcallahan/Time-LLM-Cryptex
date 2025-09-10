@@ -76,6 +76,7 @@ def parse_args():
     parser.add_argument('--percent', type=int, default=100, help='Percentage of the dataset to use for training (useful for quick experiments or ablation studies).')
     parser.add_argument('--num_tokens', type=int, default=1000, help='Number of tokens for the mapping layer (controls tokenization granularity).')
     parser.add_argument('--enable_mlflow', action='store_true', default=True, help='Enable MLflow experiment tracking and logging (recommended: keep enabled).')
+    parser.add_argument('--inference', action='store_true', default=False, help='Inference mode instead of training.')
     return parser.parse_args()
 
 def run_training(args, accelerator):
@@ -152,15 +153,15 @@ def run_training(args, accelerator):
                 iter_count += 1
                 model_optim.zero_grad()
 
-                # Move data to accelerator device
-                try:
+                if not args.inference:
                     input_data = input_data.float().to(accelerator.device)  # [batch, seq_len, num_features]
-                    target_data = target_data.float().to(accelerator.device)  # [batch, pred_len, num_features]
-                except Exception as e:
-                    raise ValueError(f"Input: {print(input_data.dtype)}\nTarget: {print(target_data.dtype)}\n{print(e)}\n{print(target_data.shape)}\nInput data and target data must be float. {e}\n\n{"-"*100}")
-                    input_data = input_data.float().to(accelerator.device)  # [batch, seq_len, num_features]
-                    target_data = target_data.float().to(accelerator.device)  # [batch, pred_len, num_features]
+                    target_data = target_data.float().to(accelerator.device)
+                else:
+                    print(f"Converting data to bfloat16...")
+                    input_data = input_data.float().to(accelerator.device).to(torch.bfloat16)
+                    target_data = target_data.float().to(accelerator.device).to(torch.bfloat16)
 
+                
                 # Forward pass
                 outputs = model(input_data)  # [batch, pred_len, num_features]
 
