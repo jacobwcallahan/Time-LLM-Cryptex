@@ -132,7 +132,7 @@ def objective(trial):
         '--root_path', './dataset/cryptex/',
         '--data_path', data_path,
         '--target', 'close',
-        '--train_epochs', '10',
+        '--train_epochs', '1',
     ]
     
     print(f"\n--- Starting Trial {trial.number} ---\n{' '.join(cmd)}\n")
@@ -210,7 +210,7 @@ if __name__ == "__main__":
     # The 'study_name' will group your runs. If you restart the script, it will resume.
     # 'storage' tells Optuna to save results to a local SQLite database.
     study = optuna.create_study(
-        study_name=f"{llm_model.lower()}_study-FALL-v2",  # New study name to avoid conflicts
+        study_name=f"{llm_model.lower()}_study-test",  # New study name to avoid conflicts
         direction="minimize",  # We want to minimize validation loss/metric
         storage=OPTUNA_STORAGE_PATH,
         load_if_exists=True, # Resume study if it already exists

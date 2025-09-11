@@ -319,7 +319,6 @@ class Model(nn.Module):
             enc_out, n_vars = self.patch_embedding(input_data)  # enc_out: [B*n_vars, num_patches, d_model], n_vars: int
         except Exception as e:
             enc_out, n_vars = self.patch_embedding(input_data.to(torch.bfloat16))  # enc_out: [B*n_vars, num_patches, d_model], n_vars: int
-            print("\n\nConverting input data to bfloat16...\n\n")
         # Reprogramming layer
         enc_out = self.reprogramming_layer(enc_out, source_embeddings, source_embeddings)  # [B*n_vars, num_patches, d_llm]
         # Concatenate prompt and encoded input

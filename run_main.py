@@ -157,7 +157,6 @@ def run_training(args, accelerator):
                     input_data = input_data.float().to(accelerator.device)  # [batch, seq_len, num_features]
                     target_data = target_data.float().to(accelerator.device)
                 else:
-                    print(f"Converting data to bfloat16...")
                     input_data = input_data.float().to(accelerator.device).to(torch.bfloat16)
                     target_data = target_data.float().to(accelerator.device).to(torch.bfloat16)
 
