@@ -21,6 +21,11 @@ llm_model = "LLAMA3.1"
 N_TRIALS = 50
 OPTUNA_STORAGE_PATH = f"sqlite:////mnt/nfs/mlflow/optuna_study.db"
 
+def parse_args():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--gpu', type=str, default='1', help='If not GPU 1, changes OPTUNA_STORAGE_PATH. Also assigns MLFLOW_SERVER_IP')
+    return parser.parse_args()
+
 
 # Helper function
 def _find_mlflow_run(client, experiment_name, model_id):
@@ -188,6 +193,9 @@ if __name__ == "__main__":
     # --- 5. Create and Run the Optuna Study ---
     # The 'study_name' will group your runs. If you restart the script, it will resume.
     # 'storage' tells Optuna to save results to a local SQLite database.
+    args = parse_args()
+    if args.gpu != '1':
+        OPTUNA_STORAGE_PATH = f"sqlite:////mnt/nfs/mlflow/optuna_study_{args.gpu}.db"
     study = optuna.create_study(
         study_name=f"{llm_model.lower()}_study",
         direction="minimize",  # We want to minimize validation loss/metric
