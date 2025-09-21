@@ -314,7 +314,11 @@ class Model(nn.Module):
         source_embeddings = self.mapping_layer(self.word_embeddings.permute(1, 0)).permute(1, 0)  # [vocab_size, d_llm] -> [d_llm, vocab_size] -> [d_llm, num_tokens] -> [num_tokens, d_llm]
         # Patch embedding for time series
         input_data = input_data.permute(0, 2, 1).contiguous()  # [B, num_features, seq_len]
-        enc_out, n_vars = self.patch_embedding(input_data)  # enc_out: [B*n_vars, num_patches, d_model], n_vars: int
+        try:
+            enc_out, n_vars = self.patch_embedding(input_data)  # enc_out: [B*n_vars, num_patches, d_model], n_vars: int
+        except Exception as e:
+            enc_out, n_vars = self.patch_embedding(input_data.to(torch.bfloat16))  # enc_out: [B*n_vars, num_patches, d_model], n_vars: int
+
         # Reprogramming layer
         enc_out = self.reprogramming_layer(enc_out, source_embeddings, source_embeddings)  # [B*n_vars, num_patches, d_llm]
         # Concatenate prompt and encoded input
