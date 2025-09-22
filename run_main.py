@@ -79,7 +79,7 @@ def parse_args():
 
     return parser.parse_args()
 
-def run_training(args, accelerator):
+def run_training(args, accelerator, artifact_path=None):
     """
     Main training/validation/testing logic for TimeLLM.
     Args:
@@ -149,7 +149,12 @@ def run_training(args, accelerator):
             train_loss = []
             model.train()
             epoch_time = time.time()
+            
             for i, (input_data, target_data) in tqdm(enumerate(train_loader), disable=not accelerator.is_local_main_process):
+                if input_data.dtype != torch.float32:
+                    print(f"Input data dtype: {input_data.dtype}")
+                if target_data.dtype != torch.float32:
+                    print(f"Target data dtype: {target_data.dtype}")
                 iter_count += 1
                 model_optim.zero_grad()
 
@@ -237,7 +242,7 @@ def run_training(args, accelerator):
                 k: v for k, v in unwrapped_model.state_dict().items()
                 if unwrapped_model.get_parameter(k).requires_grad
             }
-            mlflow.pytorch.log_state_dict(state_dict, artifact_path=None)
+            mlflow.pytorch.log_state_dict(state_dict, artifact_path=artifact_path)
             accelerator.print(f"Model '{args.model_id}' has been logged to MLflow.")
             
             # Clean up temporary early stopping checkpoints

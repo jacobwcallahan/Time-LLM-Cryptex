@@ -27,6 +27,27 @@ def parse_args():
     parser.add_argument('--gpu', type=str, default='1', help='If not GPU 1, changes OPTUNA_STORAGE_PATH. Also assigns MLFLOW_SERVER_IP')
     return parser.parse_args()
 
+def stream_and_capture(cmd):
+    """
+    Streams and captures the output of a command. 
+    This is used to print the output of the run_main.py file to the console in real-time.
+    As well as capture the output of the command in a list of lines.
+    """
+    proc = subprocess.Popen(
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        bufsize=1
+    )
+    lines = []
+    for line in iter(proc.stdout.readline, ''):
+        print(line, end='', flush=True)
+        lines.append(line)
+    proc.stdout.close()
+    rc = proc.wait()
+    return rc, ''.join(lines)
+
 
 # Helper function
 def _find_mlflow_run(client, experiment_name, model_id):
@@ -84,7 +105,7 @@ def objective(trial):
 
     # --- Static Parameters (won't be tuned in this study) ---
     # llm_model = "LLAMA" # Defined outside the function to be used in Optuna study name
-    granularity = "daily"
+    granularity = "weekly-full"
     metric = "MDA"
     
     # --- Dynamic/Conditional Parameters ---
@@ -96,7 +117,9 @@ def objective(trial):
     data_path_map = {
         'hourly': 'candlesticks-h.csv',
         'minute': 'candlesticks-Min.csv',
-        'daily': 'candlesticks-D.csv'
+        'daily': 'candlesticks-D.csv', 
+        'weekly': 'candlesticks-W.csv',
+        'weekly-full': 'candlesticks-W-2024-2025.csv'
     }
     data_path = data_path_map[granularity]
 
@@ -145,10 +168,8 @@ def objective(trial):
     
     try:
         # Launch the subprocess
-        process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
-        for line in process.stdout:
-            print(line, end="")  # stream live
-        process.wait()        
+        rc, lines = stream_and_capture(cmd)
+        
         # After the run completes, find it in MLflow
         time.sleep(2) # Give MLflow a moment to log everything
         run = _find_mlflow_run(client, llm_model, model_id)
@@ -196,9 +217,10 @@ if __name__ == "__main__":
     # 'storage' tells Optuna to save results to a local SQLite database.
     args = parse_args()
     if args.gpu != '1':
-        OPTUNA_STORAGE_PATH = f"sqlite:////mnt/nfs/mlflow/optuna_study_{args.gpu}.db"
+        OPTUNA_STORAGE_PATH = f"sqlite:////mnt/nfs/mlflow/optuna_study_2.db"
+
     study = optuna.create_study(
-        study_name=f"{llm_model.lower()}_study",
+        study_name=f"{llm_model.lower()}_study_weekly_full",
         direction="minimize",  # We want to minimize validation loss/metric
         storage=OPTUNA_STORAGE_PATH,
         load_if_exists=True # Resume study if it already exists
