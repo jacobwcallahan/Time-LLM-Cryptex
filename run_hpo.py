@@ -26,31 +26,7 @@ def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument('--gpu', type=str, default='1', help='If not GPU 1, changes OPTUNA_STORAGE_PATH. Also assigns MLFLOW_SERVER_IP')
     return parser.parse_args()
-
-def stream_and_capture(cmd, file_path = "artifacts/artifact.txt"):
-    """
-    Streams and captures the output of a command. 
-    This is used to print the output of the run_main.py file to the console in real-time.
-    As well as capture the output of the command in a list of lines.
-    """
-    proc = subprocess.Popen(
-        cmd,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
-        bufsize=1
-    )
-    lines = []
-    for line in iter(proc.stdout.readline, ''):
-        print(line, end='', flush=True)
-        lines.append(line)
-    proc.stdout.close()
-    rc = proc.wait()
-
-    with open(file_path, "w") as f:
-        f.write(''.join(lines))
-    
-
+  
 
 # Helper function
 def _find_mlflow_run(client, experiment_name, model_id):
@@ -127,6 +103,9 @@ def objective(trial):
     }
     data_path = data_path_map[granularity]
 
+    # Set target based on granularity
+    target = "returns" if granularity == "returns" else "close"
+
     # --- 3. Build and Launch the Experiment Command ---
     # This assembles the command to run your main training script.
     cmd = [
@@ -156,7 +135,7 @@ def objective(trial):
         '--data', 'CRYPTEX',
         '--root_path', './dataset/cryptex/',
         '--data_path', data_path,
-        '--target', 'close',
+        '--target', target,
         '--train_epochs', '10',
     ]
     
@@ -172,7 +151,7 @@ def objective(trial):
     
     try:
         # Launch the subprocess
-        stream_and_capture(cmd)
+        subprocess.run(cmd, check=True, text=True, capture_output=True)
         # After the run completes, find it in MLflow
         time.sleep(2) # Give MLflow a moment to log everything
         run = _find_mlflow_run(client, llm_model, model_id)
