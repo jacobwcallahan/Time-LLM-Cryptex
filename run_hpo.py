@@ -108,7 +108,7 @@ def objective(trial):
 
     # --- Static Parameters (won't be tuned in this study) ---
     # llm_model = "LLAMA" # Defined outside the function to be used in Optuna study name
-    granularity = "weekly-full"
+    granularity = "returns"
     metric = "MDA"
     
     # --- Dynamic/Conditional Parameters ---
@@ -122,7 +122,8 @@ def objective(trial):
         'minute': 'candlesticks-Min.csv',
         'daily': 'candlesticks-D.csv', 
         'weekly': 'candlesticks-W.csv',
-        'weekly-full': 'candlesticks-W-2014-2024.csv'
+        'weekly-full': 'candlesticks-W-2014-2024.csv',
+        'returns': 'returns-W-2014-2024.csv'
     }
     data_path = data_path_map[granularity]
 
@@ -219,10 +220,10 @@ if __name__ == "__main__":
     # 'storage' tells Optuna to save results to a local SQLite database.
     args = parse_args()
     if args.gpu != '1':
-        OPTUNA_STORAGE_PATH = f"sqlite:////mnt/nfs/mlflow/optuna_study_2.db"
+        OPTUNA_STORAGE_PATH = f"sqlite:////mnt/nfs/mlflow/optuna_study_returns.db"
 
     study = optuna.create_study(
-        study_name=f"{llm_model.lower()}_study_weekly_full",
+        study_name=f"{llm_model.lower()}_study_weekly_returns",
         direction="minimize",  # We want to minimize validation loss/metric
         storage=OPTUNA_STORAGE_PATH,
         load_if_exists=True # Resume study if it already exists
