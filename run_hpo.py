@@ -27,7 +27,7 @@ def parse_args():
     parser.add_argument('--gpu', type=str, default='1', help='If not GPU 1, changes OPTUNA_STORAGE_PATH. Also assigns MLFLOW_SERVER_IP')
     return parser.parse_args()
 
-def stream_and_capture(cmd):
+def stream_and_capture(cmd, file_path = "artifacts/artifact.txt"):
     """
     Streams and captures the output of a command. 
     This is used to print the output of the run_main.py file to the console in real-time.
@@ -46,7 +46,10 @@ def stream_and_capture(cmd):
         lines.append(line)
     proc.stdout.close()
     rc = proc.wait()
-    return rc, ''.join(lines)
+
+    with open(file_path, "w") as f:
+        f.write(''.join(lines))
+    
 
 
 # Helper function
@@ -119,7 +122,7 @@ def objective(trial):
         'minute': 'candlesticks-Min.csv',
         'daily': 'candlesticks-D.csv', 
         'weekly': 'candlesticks-W.csv',
-        'weekly-full': 'candlesticks-W-2024-2025.csv'
+        'weekly-full': 'candlesticks-W-2014-2024.csv'
     }
     data_path = data_path_map[granularity]
 
@@ -168,8 +171,7 @@ def objective(trial):
     
     try:
         # Launch the subprocess
-        rc, lines = stream_and_capture(cmd)
-        
+        stream_and_capture(cmd)
         # After the run completes, find it in MLflow
         time.sleep(2) # Give MLflow a moment to log everything
         run = _find_mlflow_run(client, llm_model, model_id)
