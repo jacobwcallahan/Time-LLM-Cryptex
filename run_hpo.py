@@ -6,6 +6,7 @@ import uuid
 import time
 import os
 import argparse
+from datetime import datetime
 
 # --- Centralized Configuration ---
 MLFLOW_SERVER_IP = "192.168.1.103"
@@ -20,11 +21,14 @@ os.environ["MLFLOW_S3_ENDPOINT_URL"] = f"http://{MLFLOW_SERVER_IP}:9000"
 # Optuna
 llm_model = "LLAMA3.1"
 N_TRIALS = 50
-OPTUNA_STORAGE_PATH = f"sqlite:////mnt/nfs/mlflow/optuna_study.db"
+OPTUNA_STORAGE_PATH = f"sqlite:////data-fast/nfs/mlflow/"
 
 def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument('--gpu', type=str, default='1', help='If not GPU 1, changes OPTUNA_STORAGE_PATH. Also assigns MLFLOW_SERVER_IP')
+    parser.add_argument('--new_study', type=str, default='False', help='If True, creates a new study based on datetime')
+    parser.add_argument('--study_name', type=str, default='', help='If not empty, uses the study name. Model name is added to the beginning of the study name.')
+    parser.add_argument('--db_name', type=str, default='optuna_study.db', help='Default is optuna_study.db. Accesses the specified database.')
     return parser.parse_args()
   
 
@@ -60,8 +64,8 @@ def objective(trial):
     
     # Categorical parameters: Optuna will choose from the list.
     features = trial.suggest_categorical("features", ["M", "MS", "S"])
-    seq_len = trial.suggest_categorical("seq_len", [14, 49, 91, 168])
-    pred_len = trial.suggest_categorical("pred_len", [2, 7, 14])
+    seq_len = trial.suggest_categorical("seq_len", [13, 26, 52, 104])
+    pred_len = trial.suggest_categorical("pred_len", [2, 4, 6])
     num_tokens = trial.suggest_categorical("num_tokens", [100, 500, 1000])
     loss = trial.suggest_categorical("loss", ["MSE", "MADL", "GMADL"])
     lradj = trial.suggest_categorical("lradj", ["type1", "type2", "type3", "PEMS", "TST", "constant"])
@@ -72,8 +76,8 @@ def objective(trial):
     n_heads = trial.suggest_categorical("n_heads", [2, 4, 8, 16])
     d_ff = trial.suggest_categorical("d_ff", [32, 64, 128, 256])
     batch_size = trial.suggest_categorical("batch_size", [8, 16, 24, 32, 64])
-    patch_len = trial.suggest_categorical("patch_len", [4, 8, 16, 32])
-    stride = trial.suggest_categorical("stride", [1, 4, 8])
+    patch_len = trial.suggest_categorical("patch_len", [2, 4, 8,])
+    stride = trial.suggest_categorical("stride", [1, 2, 4, 8])
 
     # Float parameters
     dropout = trial.suggest_float("dropout", 0.0, 0.5, step=0.1)
@@ -84,13 +88,13 @@ def objective(trial):
 
     # --- Static Parameters (won't be tuned in this study) ---
     # llm_model = "LLAMA" # Defined outside the function to be used in Optuna study name
-    granularity = "returns"
+    granularity = "returns-weekly"
     metric = "MDA"
     
     # --- Dynamic/Conditional Parameters ---
     # Generate a unique model_id for each trial
     trial_id = str(uuid.uuid4())[:8]
-    model_id = f"{llm_model}_L{llm_layers}_{features}_seq{seq_len}_trial_{trial_id}"
+    model_id = f"{llm_model}_L{llm_layers}_{features}_seq{seq_len}_trial_{trial_id}_granularity_{granularity}"
     
     # Set data path based on granularity
     data_path_map = {
@@ -99,12 +103,12 @@ def objective(trial):
         'daily': 'candlesticks-D.csv', 
         'weekly': 'candlesticks-W.csv',
         'weekly-full': 'candlesticks-W-2014-2024.csv',
-        'returns': 'returns-W-2014-2024.csv'
+        'returns-weekly': 'returns-W-2014-2024.csv'
     }
     data_path = data_path_map[granularity]
 
     # Set target based on granularity
-    target = "returns" if granularity == "returns" else "close"
+    target = "returns" if "returns" in granularity else "close"
 
     # --- 3. Build and Launch the Experiment Command ---
     # This assembles the command to run your main training script.
@@ -199,10 +203,31 @@ if __name__ == "__main__":
     # 'storage' tells Optuna to save results to a local SQLite database.
     args = parse_args()
     if args.gpu != '1':
-        OPTUNA_STORAGE_PATH = f"sqlite:////mnt/nfs/mlflow/optuna_study_returns.db"
+        OPTUNA_STORAGE_PATH = f"sqlite:////mnt/nfs/mlflow/"
+
+    # Add the database name to the storage path
+    if args.db_name != '':
+        if args.db_name[-4:] != ".db":
+            OPTUNA_STORAGE_PATH += f"{args.db_name}.db"
+        else:
+            OPTUNA_STORAGE_PATH += f"{args.db_name}"
+    else:
+        OPTUNA_STORAGE_PATH += f"optuna_study.db"
+
+    print(f"OPTUNA_STORAGE_PATH: {OPTUNA_STORAGE_PATH}")
+
+    # Create a new study name if the user wants a new study based on datetime
+    if args.new_study == 'True':
+        study_name = f"{llm_model.lower()}_{datetime.now().strftime('%Y%m%d_%H%M%S')}_study"
+    else:
+        # Use the old study name
+        if args.study_name == '':
+            study_name = f"{llm_model.lower()}_study"
+        else:
+            study_name = f"{llm_model.lower()}_{args.study_name}"
 
     study = optuna.create_study(
-        study_name=f"{llm_model.lower()}_study_weekly_returns",
+        study_name=study_name,
         direction="minimize",  # We want to minimize validation loss/metric
         storage=OPTUNA_STORAGE_PATH,
         load_if_exists=True # Resume study if it already exists
