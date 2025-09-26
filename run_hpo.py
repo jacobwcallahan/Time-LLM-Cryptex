@@ -25,10 +25,11 @@ OPTUNA_STORAGE_PATH = f"sqlite:////data-fast/nfs/mlflow/"
 
 def parse_args():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--gpu', type=str, default='1', help='If not GPU 1, changes OPTUNA_STORAGE_PATH. Also assigns MLFLOW_SERVER_IP')
+    parser.add_argument('--gpu', type=str, default='1', help='If not GPU 1, changes OPTUNA_STORAGE_PATH.')
     parser.add_argument('--new_study', type=str, default='False', help='If True, creates a new study based on datetime')
     parser.add_argument('--study_name', type=str, default='', help='If not empty, uses the study name. Model name is added to the beginning of the study name.')
     parser.add_argument('--db_name', type=str, default='optuna_study.db', help='Default is optuna_study.db. Accesses the specified database.')
+    parser.add_argument('--data_path', type=str, default='daily', help='Data path to use. Data path already exists in ./dataset/cryptex/')
     return parser.parse_args()
   
 
@@ -88,27 +89,23 @@ def objective(trial):
 
     # --- Static Parameters (won't be tuned in this study) ---
     # llm_model = "LLAMA" # Defined outside the function to be used in Optuna study name
-    granularity = "returns-weekly"
+
+    data_path = args.data_path
+    dataset = data_path.split("/")[-1]
+
+    # Set user attributes for the trial based on the data path
+    trial.set_user_attr("dataset", dataset)
+    trial.set_user_attr("granularity", data_path.split("/")[-2])
+    trial.set_user_attr("target", "returns" if "ret" in data_path.lower() else "close")
+
+    target = "returns" if "ret" in data_path.lower() else "close"
+    
     metric = "MDA"
     
     # --- Dynamic/Conditional Parameters ---
     # Generate a unique model_id for each trial
     trial_id = str(uuid.uuid4())[:8]
-    model_id = f"{llm_model}_L{llm_layers}_{features}_seq{seq_len}_trial_{trial_id}_granularity_{granularity}"
-    
-    # Set data path based on granularity
-    data_path_map = {
-        'hourly': 'candlesticks-h.csv',
-        'minute': 'candlesticks-Min.csv',
-        'daily': 'candlesticks-D.csv', 
-        'weekly': 'candlesticks-W.csv',
-        'weekly-full': 'candlesticks-W-2014-2024.csv',
-        'returns-weekly': 'returns-W-2014-2024.csv'
-    }
-    data_path = data_path_map[granularity]
-
-    # Set target based on granularity
-    target = "returns" if "returns" in granularity else "close"
+    model_id = f"{llm_model}_L{llm_layers}_{features}_seq{seq_len}_trial_{trial_id}_dataset_{dataset}"
 
     # --- 3. Build and Launch the Experiment Command ---
     # This assembles the command to run your main training script.
@@ -207,7 +204,7 @@ if __name__ == "__main__":
 
     # Add the database name to the storage path
     if args.db_name != '':
-        if args.db_name[-4:] != ".db":
+        if args.db_name[-3:] != ".db":
             OPTUNA_STORAGE_PATH += f"{args.db_name}.db"
         else:
             OPTUNA_STORAGE_PATH += f"{args.db_name}"
