@@ -9,7 +9,7 @@ class Dataset_Crypto(Dataset):
     size: [seq_len, pred_len] must be provided (defaults handled by argument parser)
     """
     def __init__(self, root_path, data_path='candlesticks-D.csv', flag='train', 
-                 size=None, features='MS', target='close', percent=100):
+                 size=None, features='MS', target='close', percent=100, train_val_test_ratio=[0.6, 0.2, 0.2]):
         assert size is not None, 'size (seq_len, pred_len) must be provided.'
         self.seq_len = size[0]  # Length of input sequence
         self.pred_len = size[1] # Length of prediction sequence
@@ -23,13 +23,13 @@ class Dataset_Crypto(Dataset):
 
         self.root_path = root_path  # Root directory for data
         self.data_path = data_path  # CSV file name
-        self.__read_data__()        # Load and preprocess data
+        self.__read_data__(train_val_test_ratio)        # Load and preprocess data
 
         self.num_features = self.data_x.shape[-1]  # Number of input features
         # Number of possible starting points for a sequence in the data
         self.tot_len = len(self.data_x) - (self.seq_len + self.pred_len - 1)
 
-    def __read_data__(self):
+    def __read_data__(self, split_ratio):
         try:
             df_raw = pd.read_csv(os.path.join(self.root_path, self.data_path))
         except Exception as e:
@@ -45,8 +45,8 @@ class Dataset_Crypto(Dataset):
         df_raw = df_raw[ordered_cols]
 
         # Split train/val/test by fixed proportions (70/10/20)
-        num_train = int(len(df_raw) * 0.7)
-        num_test = int(len(df_raw) * 0.2)
+        num_train = int(len(df_raw) * split_ratio[0])
+        num_test = int(len(df_raw) * split_ratio[1])
         num_vali = len(df_raw) - num_train - num_test
         # Calculate borders for each split
         border1s = [0, num_train - self.seq_len, len(df_raw) - num_test - self.seq_len]

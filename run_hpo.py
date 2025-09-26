@@ -65,20 +65,22 @@ def objective(trial):
     
     # Categorical parameters: Optuna will choose from the list.
     features = trial.suggest_categorical("features", ["M", "MS", "S"])
-    seq_len = trial.suggest_categorical("seq_len", [13, 26, 52, 104])
-    pred_len = trial.suggest_categorical("pred_len", [2, 4, 6])
+    seq_len = trial.suggest_categorical("seq_len", [24, 36, 48])
+    pred_len = trial.suggest_categorical("pred_len", [12, 24])
     num_tokens = trial.suggest_categorical("num_tokens", [100, 500, 1000])
     loss = trial.suggest_categorical("loss", ["MSE", "MADL", "GMADL"])
     lradj = trial.suggest_categorical("lradj", ["type1", "type2", "type3", "PEMS", "TST", "constant"])
 
+    n_heads = trial.suggest_categorical("n_heads", [2, 4, 8, 16])
+    d_ff = trial.suggest_categorical("d_ff", [32, 64, 128, 256])
+    batch_size = trial.suggest_categorical("batch_size", [8, 16, 32, 64])
+    patch_len = trial.suggest_categorical("patch_len", [12, 16, 24])
+    stride = trial.suggest_categorical("stride", [6, 12])
+
     # Integer parameters: Optuna will choose an integer within the range.
     llm_layers = trial.suggest_int("llm_layers", 4, 12)
     d_model = trial.suggest_int("d_model", 16, 64, step=16) # Suggests 16, 32, 48, 64
-    n_heads = trial.suggest_categorical("n_heads", [2, 4, 8, 16])
-    d_ff = trial.suggest_categorical("d_ff", [32, 64, 128, 256])
-    batch_size = trial.suggest_categorical("batch_size", [8, 16, 24, 32, 64])
-    patch_len = trial.suggest_categorical("patch_len", [2, 4, 8,])
-    stride = trial.suggest_categorical("stride", [1, 2, 4, 8])
+
 
     # Float parameters
     dropout = trial.suggest_float("dropout", 0.0, 0.5, step=0.1)
