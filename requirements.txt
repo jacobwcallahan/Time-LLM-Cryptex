@@ -17,3 +17,5 @@ optuna-dashboard
 psycopg2-binary
 boto3
 backtrader
+requests
+python-dotenv
