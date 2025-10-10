@@ -1,0 +1,14 @@
+{
+  "name": "Bitcoin",
+  "symbol": "BTC",
+  "price": 121397.31178358561,
+  "volume_24h": 74734443723.13693,
+  "volume_change_24h": 26.3407,
+  "percent_change_1h": -0.07743152,
+  "percent_change_24h": -0.3487418,
+  "percent_change_7d": 0.85820991,
+  "percent_change_30d": 8.14711374,
+  "market_cap": 2419752281318.2554,
+  "market_cap_dominance": 58.5625,
+  "last_updated": "2025-10-10T09:54:00.000Z"
+}
