@@ -87,7 +87,6 @@ class Dataset_Crypto(Dataset):
         return (len(self.data_x) - self.seq_len - self.pred_len + 1) * self.num_features
 
 
-
 def data_provider(args, flag):
     """
     Returns a Dataset_Crypto and DataLoader for the CRYPTEX dataset.
