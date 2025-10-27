@@ -124,7 +124,11 @@ def run_training(args, accelerator):
 
         if args.lradj == 'COS':
             scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(model_optim, T_max=20, eta_min=1e-8)
+        elif args.lradj == 'constant':
+            # Constant learning rate - no adjustment
+            scheduler = torch.optim.lr_scheduler.LambdaLR(model_optim, lr_lambda=lambda epoch: 1.0)
         else:
+            # OneCycleLR for all other cases (TST, etc.)
             scheduler = lr_scheduler.OneCycleLR(optimizer=model_optim,
                                                 steps_per_epoch=train_steps,
                                                 pct_start=args.pct_start,
@@ -160,10 +164,23 @@ def run_training(args, accelerator):
 
                 # Forward pass
                 outputs = model(input_data)  # [batch, pred_len, num_features]
+                
+                # Debug: Check for NaN in inputs/outputs
+                if torch.isnan(input_data).any():
+                    accelerator.print(f"WARNING: NaN in input_data at iteration {i}")
+                if torch.isnan(outputs).any():
+                    accelerator.print(f"WARNING: NaN in outputs at iteration {i}")
+                    accelerator.print(f"Output stats: min={outputs.min():.6f}, max={outputs.max():.6f}, mean={outputs.mean():.6f}")
 
                 # Loss calculation (match validation logic)
                 f_dim = -1 if args.features == 'MS' else 0
                 loss = criterion(outputs[:, -args.pred_len:, f_dim:], target_data[:, :, f_dim:])
+                
+                # Debug: Check for NaN in loss
+                if torch.isnan(loss):
+                    accelerator.print(f"WARNING: NaN loss at iteration {i}")
+                    accelerator.print(f"Pred range: {outputs.min():.6f} to {outputs.max():.6f}")
+                    accelerator.print(f"Target range: {target_data.min():.6f} to {target_data.max():.6f}")
                 train_loss.append(loss.item())
 
                 # Backward pass and optimizer step

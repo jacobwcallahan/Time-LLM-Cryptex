@@ -1,6 +1,7 @@
 import os
 import numpy as np
 import pandas as pd
+import torch
 from torch.utils.data import Dataset, DataLoader
 
 class Dataset_Crypto(Dataset):
@@ -9,7 +10,7 @@ class Dataset_Crypto(Dataset):
     size: [seq_len, pred_len] must be provided (defaults handled by argument parser)
     """
     def __init__(self, root_path, data_path='candlesticks-D.csv', flag='train', 
-                 size=None, features='MS', target='close', percent=100, train_val_test_ratio=[0.6, 0.2, 0.2]):
+                 size=None, features='MS', target='close', percent=100, train_val_test_ratio=[0.8, 0.1, 0.1]):
         assert size is not None, 'size (seq_len, pred_len) must be provided.'
         self.seq_len = size[0]  # Length of input sequence
         self.pred_len = size[1] # Length of prediction sequence
@@ -20,6 +21,7 @@ class Dataset_Crypto(Dataset):
         self.features = features  # Feature selection mode: 'M', 'S', or 'MS'
         self.target = target      # Target column name
         self.percent = percent    # Percentage of training data to use
+        self.flag = flag          # Store flag for debugging
 
         self.root_path = root_path  # Root directory for data
         self.data_path = data_path  # CSV file name
@@ -69,6 +71,17 @@ class Dataset_Crypto(Dataset):
 
         # Store the processed data for this split
         self.data_x = data[border1:border2]
+        
+        # Data validation - check for NaN/Inf values (using numpy for numpy arrays)
+        if np.isnan(self.data_x).any():
+            print(f"WARNING: NaN values found in {self.flag} data!")
+            print(f"NaN count: {np.isnan(self.data_x).sum()}")
+        if np.isinf(self.data_x).any():
+            print(f"WARNING: Inf values found in {self.flag} data!")
+            print(f"Inf count: {np.isinf(self.data_x).sum()}")
+        
+        print(f"{self.flag} data shape: {self.data_x.shape}")
+        print(f"{self.flag} data range: {self.data_x.min():.6f} to {self.data_x.max():.6f}")
 
     def __getitem__(self, index):
         # Calculate which feature and which time window this index refers to

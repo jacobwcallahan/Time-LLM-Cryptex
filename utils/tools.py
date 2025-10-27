@@ -93,7 +93,7 @@ def vali(args, accelerator, model, vali_data, vali_loader, criterion, metric_fun
             input_data = input_data.float().to(accelerator.device)
             outputs = model(input_data)
 
-            outputs, batch_y = accelerator.gather_for_metrics((outputs, target_data))
+            outputs, batch_y, input_data = accelerator.gather_for_metrics((outputs, target_data, input_data))
 
             f_dim = -1 if args.features == 'MS' else 0
             outputs = outputs[:, -args.pred_len:, f_dim:]
@@ -104,7 +104,7 @@ def vali(args, accelerator, model, vali_data, vali_loader, criterion, metric_fun
 
             loss = criterion(pred, true)
 
-            metric_loss = metric_func(pred, true)
+            metric_loss = metric_func(pred, true, input_data)
 
             total_loss.append(loss.item())
             total_metric_loss.append(metric_loss.item())

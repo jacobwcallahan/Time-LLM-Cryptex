@@ -38,13 +38,13 @@ GLOBAL_PARAMS = {
     'enc_in': 7,
     
     # Training configuration
-    'train_epochs': 10,
+    'train_epochs': 10,  # Run 10 epochs with early stopping
     'batch_size': 16,
     'eval_batch_size': 8,
-    'learning_rate': 0.0001,
+    'learning_rate': 0.00001,  # 10x smaller to prevent gradient explosion
     'loss': 'MSE',
-    'metric': 'MAE',
-    'lradj': 'type1',
+    'metric': 'MDA',
+    'lradj': 'constant',
     'pct_start': 0.2,
     'patience': 10,
     'percent': 100,
@@ -62,17 +62,168 @@ GLOBAL_PARAMS = {
 # --- Experiments List ---
 EXPERIMENTS = [
     {
-        'name': 'daily_50pct_test',
-        'data_path': 'cryptex/daily/candlesticks-D.csv',
-        'percent': 20,  # Use 50% of the data
+        'name': 'hourly_1week_to_1day_25pct',
+        'data_path': 'cryptex/hourly/candlesticks-h-clean.csv',  # Use cleaned data without NaN
+        'seq_len': 168,
+        'pred_len': 24,
+        'batch_size': 16,
+        'percent': 25,
+        'loss': 'MSE',
+        'metric': 'MDA',
+        'lradj': 'constant',
     },
-    # Add more experiments here as needed
+    {
+        'name': 'hourly_2weeks_to_1day_25pct',
+        'data_path': 'cryptex/hourly/candlesticks-h-clean.csv',  # Use cleaned data without NaN
+        'seq_len': 336,
+        'pred_len': 24,
+        'batch_size': 16,
+        'percent': 25,
+        'loss': 'MSE',
+        'metric': 'MDA',
+        'lradj': 'constant',
+    },
+    {
+        'name': 'hourly_1week_to_1day_50pct',
+        'data_path': 'cryptex/hourly/candlesticks-h-clean.csv',  # Use cleaned data without NaN
+        'seq_len': 168,
+        'pred_len': 24,
+        'batch_size': 16,
+        'percent': 50,
+        'loss': 'MSE',
+        'metric': 'MDA',
+        'lradj': 'constant',
+    },
+    {
+        'name': 'hourly_2weeks_to_1day_50pct',
+        'data_path': 'cryptex/hourly/candlesticks-h-clean.csv',  # Use cleaned data without NaN
+        'seq_len': 336,
+        'pred_len': 24,
+        'batch_size': 16,
+        'percent': 50,
+        'loss': 'MSE',
+        'metric': 'MDA',
+        'lradj': 'constant',
+    },
+    {
+        'name': 'hourly_1week_to_1day_75pct',
+        'data_path': 'cryptex/hourly/candlesticks-h-clean.csv',  # Use cleaned data without NaN
+        'seq_len': 168,
+        'pred_len': 24,
+        'batch_size': 16,
+        'percent': 75,
+        'loss': 'MSE',
+        'metric': 'MDA',
+        'lradj': 'constant',
+    },
+    {
+        'name': 'hourly_2weeks_to_1day_75pct',
+        'data_path': 'cryptex/hourly/candlesticks-h-clean.csv',  # Use cleaned data without NaN
+        'seq_len': 336,
+        'pred_len': 24,
+        'batch_size': 16,
+        'percent': 75,
+        'loss': 'MSE',
+        'metric': 'MDA',
+        'lradj': 'constant',
+    },
+    # Daily data experiments - 1e-5 constant LR
+    {
+        'name': 'daily_1week_to_1day_25pct',
+        'data_path': 'cryptex/daily/candlesticks-D.csv',
+        'seq_len': 7,
+        'pred_len': 1,
+        'batch_size': 16,
+        'percent': 25,
+        'loss': 'MSE',
+        'metric': 'MDA',
+        'lradj': 'constant',
+    },
+    {
+        'name': 'daily_2weeks_to_1day_25pct',
+        'data_path': 'cryptex/daily/candlesticks-D.csv',
+        'seq_len': 14,
+        'pred_len': 1,
+        'batch_size': 16,
+        'percent': 25,
+        'loss': 'MSE',
+        'metric': 'MDA',
+        'lradj': 'constant',
+    },
+    {
+        'name': 'daily_1week_to_1day_50pct',
+        'data_path': 'cryptex/daily/candlesticks-D.csv',
+        'seq_len': 7,
+        'pred_len': 1,
+        'batch_size': 16,
+        'percent': 50,
+        'loss': 'MSE',
+        'metric': 'MDA',
+        'lradj': 'constant',
+    },
+    {
+        'name': 'daily_2weeks_to_1day_50pct',
+        'data_path': 'cryptex/daily/candlesticks-D.csv',
+        'seq_len': 14,
+        'pred_len': 1,
+        'batch_size': 16,
+        'percent': 50,
+        'loss': 'MSE',
+        'metric': 'MDA',
+        'lradj': 'constant',
+    },
+    {
+        'name': 'daily_1week_to_1day_75pct',
+        'data_path': 'cryptex/daily/candlesticks-D.csv',
+        'seq_len': 7,
+        'pred_len': 1,
+        'batch_size': 16,
+        'percent': 75,
+        'loss': 'MSE',
+        'metric': 'MDA',
+        'lradj': 'constant',
+    },
+    {
+        'name': 'daily_2weeks_to_1day_75pct',
+        'data_path': 'cryptex/daily/candlesticks-D.csv',
+        'seq_len': 14,
+        'pred_len': 1,
+        'batch_size': 16,
+        'percent': 75,
+        'loss': 'MSE',
+        'metric': 'MDA',
+        'lradj': 'constant',
+    },
+    {
+        'name': 'daily_1week_to_1day_100pct',
+        'data_path': 'cryptex/daily/candlesticks-D.csv',
+        'seq_len': 7,
+        'pred_len': 1,
+        'batch_size': 16,
+        'percent': 100,
+        'loss': 'MSE',
+        'metric': 'MDA',
+        'lradj': 'constant',
+    },
+    {
+        'name': 'daily_2weeks_to_1day_100pct',
+        'data_path': 'cryptex/daily/candlesticks-D.csv',
+        'seq_len': 14,
+        'pred_len': 1,
+        'batch_size': 16,
+        'percent': 100,
+        'loss': 'MSE',
+        'metric': 'MDA',
+        'lradj': 'constant',
+    },
 ]
 
 def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument('--gpu', type=str, default='1', help='If not GPU 1, changes OPTUNA_STORAGE_PATH.')
     parser.add_argument('--checkpoints', type=str, default='./checkpoints/', help='Directory for checkpoints.')
+    parser.add_argument('--start-from', type=int, default=0, 
+                       help='Start from experiment index (0-based). Default: 0 (run all experiments)')
     return parser.parse_args()
 
 def _find_mlflow_run(client, experiment_name, model_id):
@@ -217,8 +368,21 @@ def main():
     """Main function to run all experiments."""
     args = parse_args()
     
+    # Validate start-from index
+    if args.start_from < 0:
+        print("Error: --start-from must be >= 0")
+        return
+    if args.start_from >= len(EXPERIMENTS):
+        print(f"Error: --start-from ({args.start_from}) >= number of experiments ({len(EXPERIMENTS)})")
+        return
+    
+    # Get experiments to run
+    experiments_to_run = EXPERIMENTS[args.start_from:]
+    
     print("=== Batch Experiments Runner ===")
-    print(f"Total experiments to run: {len(EXPERIMENTS)}")
+    print(f"Total experiments: {len(EXPERIMENTS)}")
+    print(f"Starting from experiment {args.start_from + 1} (skipping first {args.start_from} experiments)")
+    print(f"Experiments to run: {len(experiments_to_run)}")
     print(f"Global LLM model: {GLOBAL_PARAMS['llm_model']}")
     print(f"MLflow server: {MLFLOW_SERVER_IP}:5000")
     print("=" * 50)
@@ -226,8 +390,9 @@ def main():
     successful_experiments = []
     failed_experiments = []
     
-    for i, experiment_config in enumerate(EXPERIMENTS, 1):
-        print(f"\n[{i}/{len(EXPERIMENTS)}] Running experiment: {experiment_config['name']}")
+    for i, experiment_config in enumerate(experiments_to_run):
+        actual_index = args.start_from + i
+        print(f"\n[{actual_index + 1}/{len(EXPERIMENTS)}] Running experiment: {experiment_config['name']}")
         
         success, model_id, error = run_experiment(experiment_config, GLOBAL_PARAMS, args)
         
@@ -247,6 +412,7 @@ def main():
     print("\n" + "=" * 50)
     print("=== BATCH EXPERIMENTS SUMMARY ===")
     print(f"Total experiments: {len(EXPERIMENTS)}")
+    print(f"Experiments run: {len(experiments_to_run)}")
     print(f"Successful: {len(successful_experiments)}")
     print(f"Failed: {len(failed_experiments)}")
     

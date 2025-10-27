@@ -54,26 +54,37 @@ class MAPELoss(nn.Module):
 
 class MDAMetric(nn.Module):
     """
-    Mean Directional Accuracy (MDA)
+    Mean Directional Accuracy (MDA) for price prediction.
+    Compares final predicted direction vs final true direction from last input price.
     """
     def __init__(self):
         super().__init__()
-
-    def forward(self, pred: torch.Tensor, true: torch.Tensor) -> torch.Tensor:
-        # pred, true shape: [batch, seq_len, feature_dim] or [batch, seq_len]
-        # Compare change direction relative to previous timestep
-
-        if pred.shape[1] < 2:
-            print(f"[Warning] Not enough steps to compute MDA. pred.shape: {pred.shape}")
-            return torch.tensor(0.0, device=pred.device)
-
-        pred_diff = pred[:, 1:] - pred[:, :-1]
-        true_diff = true[:, 1:] - true[:, :-1]
-
-        correct = (pred_diff * true_diff) > 0  # boolean tensor: True if same direction
-        mda = correct.float().mean()  # take mean accuracy over all elements
-
-        return mda
+    
+    def forward(self, pred: torch.Tensor, true: torch.Tensor, input_data: torch.Tensor = None) -> torch.Tensor:
+        # pred, true: [batch, pred_len, feature_dim]
+        # input_data: [batch, seq_len, feature_dim] - contains last input price
+        
+        if input_data is not None:
+            # Extract last actual price (end of input sequence)
+            last_price = input_data[:, -1:, :]  # [batch, 1, feature_dim]
+            
+            # Compare FINAL predictions to last input price
+            pred_final = pred[:, -1:, :]  # [batch, 1, feature_dim] - final prediction only
+            true_final = true[:, -1:, :]  # [batch, 1, feature_dim] - final true value only
+            
+            pred_dir = pred_final - last_price
+            true_dir = true_final - last_price
+            
+            correct = (pred_dir * true_dir) > 0
+            return correct.float().mean()
+        else:
+            # Fallback: current implementation
+            if pred.shape[1] < 2:
+                return torch.tensor(0.0, device=pred.device)
+            pred_diff = pred[:, 1:] - pred[:, :-1]
+            true_diff = true[:, 1:] - true[:, :-1]
+            correct = (pred_diff * true_diff) > 0
+            return correct.float().mean()
 
 class SharpeRatioMetric(nn.Module):
     """
