@@ -190,8 +190,13 @@ def set_optuna_vars(trial, data_path, args):
     trial.set_user_attr("target", params["target"])
     trial.set_user_attr("data_type", "returns" if args.returns else "ohlcv")
     trial.set_user_attr("metric", "MDA")
-    print(params)
-    print("--------------------------------")
+    
+    print("--------------------------------\n")
+    print("Trial Parameters:")
+    for key, value in params.items():
+        print(f"{key}: {value}", end="| ")
+    
+    print("\n\n--------------------------------")
 
     return params
 
@@ -227,7 +232,7 @@ def run_pipeline(run, mlflow_client, metrics_db_path, model_id, llm_model, args,
             model_id = model_id, 
             mlflow_client = mlflow_client,
             experiment_name = experiment_name,
-            dataset_path = DATASET_PATH, 
+            dataset_path = DATASET_PATH.parent, 
             granularity = args.granularity, 
             aggregate = args.aggregate, 
             start_date = args.inf_start, 
@@ -350,6 +355,8 @@ def objective(trial):
     # This is more robust than parsing stdout.
     client = mlflow.tracking.MlflowClient()
     
+
+    
     # We need to find the MLflow run associated with this trial.
     # We'll use the model_id (which includes trial_id) as a unique tag.
     
@@ -368,6 +375,12 @@ def objective(trial):
         time.sleep(4) # Give MLflow a moment to log everything
 
         run = _find_mlflow_run(client, experiment_name, model_id)
+
+        run.log_param("granularity", args.granularity)
+        run.log_param("start", args.start)
+        run.log_param("end", args.end)
+        run.log_param("aggregate", args.aggregate)
+        
         
         if not run:
             raise optuna.exceptions.TrialPruned("Could not find MLflow run post-execution.")
