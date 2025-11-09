@@ -141,7 +141,6 @@ def main():
             result_df.to_csv(cli_args.save_path + '/inference.csv', index=False)
 
         # Log to MLflow
-        mlflow.set_experiment(args.experiment_name)
         with mlflow.start_run(run_id=run_id):
             mlflow.log_artifact(csv_path)
             mlflow.set_tag('inference', 'completed')

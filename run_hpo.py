@@ -11,7 +11,7 @@ import argparse
 from datetime import datetime
 import yaml
 from pathlib import Path
-from utils.pipeline import perform_inference, perform_backtest, inf_analysis, convert_to_returns, convert_back_to_candlesticks, metrics_to_db, create_metrics_json, aggregate_data
+from utils.pipeline import run_inference, perform_backtest, convert_to_returns, metrics_to_db, create_metrics_json, aggregate_data, get_mse_vals, get_mda_vals
 import pathlib
 import warnings
 import sqlite3
@@ -186,6 +186,7 @@ def set_optuna_vars(trial, data_path, args):
 
     trial.set_user_attr("dates", f"{args.start}_{args.end}")
     trial.set_user_attr("granularity", args.granularity)
+    trial.set_user_attr("aggregate", args.aggregate)
     trial.set_user_attr("target", params["target"])
     trial.set_user_attr("data_type", "returns" if args.returns else "ohlcv")
     trial.set_user_attr("metric", "MDA")
@@ -195,13 +196,14 @@ def set_optuna_vars(trial, data_path, args):
     return params
 
 
-def run_pipeline(run, metrics_db_path, model_id, llm_model, args, inf_path, trial_dict, experiment_name):
+
+def run_pipeline(run, mlflow_client, metrics_db_path, model_id, llm_model, args, inf_path, trial_dict, experiment_name):
     """
     Runs the pipeline for the model if the inference path is provided.
     It logs the MDA metric for the first candle, the parameters, and the summary table to the metrics database.
     Also logs the summary table to the MLflow run.
 
-    Args:
+    Args:   
         run: MLflow run object
         metrics_db_path: path to the metrics database
         model_id: model id
@@ -217,70 +219,90 @@ def run_pipeline(run, metrics_db_path, model_id, llm_model, args, inf_path, tria
 
     # Checks to run inference if the inference path is provided
     # As well checks if the returns flag is set and converts the data back to candlesticks
-    if INFERENCE:
+    if not INFERENCE:
+        return
+
+    try:
+        inf_output_path = run_inference(
+            model_id = model_id, 
+            mlflow_client = mlflow_client,
+            experiment_name = experiment_name,
+            dataset_path = DATASET_PATH, 
+            granularity = args.granularity, 
+            aggregate = args.aggregate, 
+            start_date = args.inf_start, 
+            end_date = args.inf_end, 
+            save_path = inf_save_path)
+
+    except Exception as e:
+        print(f"\nInference failed - Stopping Pipeline: {e}\n")
+        return
+
+    try:
+        mda_vals = get_mda_vals(inf_output_path)
+        mse_vals = get_mse_vals(inf_output_path)
+        rmse_vals = {f"RMSE_{key.split('_')[1]}": round((value) ** 0.5, 6) for key, value in mse_vals.items()}
         try:
-            # MDA Metrics for the inference data
-            perform_inference(model_id, llm_model, inf_path, save_path = inf_save_path, experiment_name = experiment_name)
-        except Exception as e:
-            print(f"\nInference failed: {e}\n")
+            if args.log_all_metrics:
+                mlflow.log_metrics(mda_vals, step = 1, run_id = run.info.run_id)
+                mlflow.log_metrics(mse_vals, step = 1, run_id = run.info.run_id)
+                mlflow.log_metrics(rmse_vals, step = 1, run_id = run.info.run_id)
+                    
+            else:
+                max_mda = max(mda_vals.values())
+                for key, value in mda_vals.items():
+                    if value == max_mda:
+                        mlflow.log_metric(key = f"Best Inf MDA", value = value, step = 1, run_id = run.info.run_id)
+                        mlflow.log_metric(key = f"Best Inf MDA Candle", value = int(key.split("_")[1]), step = 1, run_id = run.info.run_id)
+                        break
+
+                min_mse = min(mse_vals.values())
+                for key, value in mse_vals.items():
+                    if value == min_mse:
+                        mlflow.log_metric(key = f"Min Inf MSE", value = round(value, 6), step = 1, run_id = run.info.run_id)
+                        mlflow.log_metric(key = f"Min Inf MSE Candle", value = int(key.split("_")[1]), step = 1, run_id = run.info.run_id)
+                        break
+                
+                min_rmse = (min_mse) ** 0.5
+                mlflow.log_metrics(min_rmse, step = 1, run_id = run.info.run_id)
+
+        except Exception as e:  
+            print(f"Metrics log failed: {e}\n")
+    except Exception as e:
+        print(f"Metric Analysis failed: {e}\n")
 
 
-        if args.returns: # Converts the inference data back to candlesticks if the returns flag is set
-            
-            # Converts the inference data back to candlesticks
-            convert_back_to_candlesticks(original_data_path = Path("temp") / "org_inf_data.csv", # Original Candlestick Data Path
-                                        inferenced_data_path = inf_output_path, 
-                                        num_predictions = trial_dict['pred_len'])
-        
+    try:    
+        # Saves the MDA metrics to the MLflow as an artifact then removes the file
+        metrics_path = Path("temp") / "mda_metrics.csv"
+        pd.DataFrame(list[tuple](mda_vals.items()), columns=['metric', 'value']).to_csv(metrics_path, index=False)
+        mlflow.log_artifact(metrics_path, run_id = run.info.run_id)
+    
+    except Exception as e:
+        print(f"\nMDA metrics save failed: {e}\n")
+    
+
+    # Performs the backtest if the backtest flag is set
+    if args.backtest:   
         try:
-            mda_vals = inf_analysis(inf_output_path)
-            try:
-                if args.log_all_metrics:
-                    mlflow.log_metrics(mda_vals, step = 1, run_id = run.info.run_id)
-                else:
-                    max_mda = max(mda_vals.values())
-                    for key, value in mda_vals.items():
-                        if value == max_mda:
-                            mlflow.log_metric(key = f"Best Inf MDA", value = value, step = 1, run_id = run.info.run_id)
-                            mlflow.log_metric(key = f"Best Inf MDA Candle", value = int(key.split("_")[1]), step = 1, run_id = run.info.run_id)
-                            break
-            except Exception as e:  
-                print(f"\nMDA metrics log failed: {e}\n")
+            perform_backtest(inf_output_path) # Performs backtest
         except Exception as e:
-            print(f"\nMDA analysis failed: {e}\n")
-
-        try:    
-            # Saves the MDA metrics to the MLflow run then removes the file
-            metrics_path = Path("temp") / "mda_metrics.csv"
-            pd.DataFrame(list[tuple](mda_vals.items()), columns=['metric', 'value']).to_csv(metrics_path, index=False)
-            mlflow.log_artifact(metrics_path, run_id = run.info.run_id)
-            if os.path.exists(metrics_path):
-                os.remove(metrics_path)
-        except Exception as e:
-            print(f"\nMDA metrics save failed: {e}\n")
+            print(f"\nBacktest failed: \n\n{e}\n")  
         
+        summary_table = pd.read_csv(Path("temp") / "summary_table.csv")
 
-        # Performs the backtest if the backtest flag is set
-        if args.backtest:   
-            try:
-                perform_backtest(inf_output_path) # Performs backtest
-            except Exception as e:
-                print(f"\nBacktest failed: \n\n{e}\n")  
-            
-            summary_table = pd.read_csv(Path("temp") / "summary_table.csv")
+        # creates the metrics json
+        metrics_json = create_metrics_json(run.info.run_id,llm_model, experiment_name, summary_table, mda_vals, trial_dict)
+        # saves the metrics to the database
+        try:
+            metrics_to_db(metrics_db_path, model_id, metrics_json)
+        except sqlite3.Error as e:
+            print(f"\nSQLite error: \n\n{e}\n")
+        except Exception as e:
+            print(f"\nMetrics to database failed: \n\n{e}\n")
 
-            # creates the metrics json
-            metrics_json = create_metrics_json(run.info.run_id,llm_model, experiment_name, summary_table, mda_vals, trial_dict)
-            # saves the metrics to the database
-            try:
-                metrics_to_db(metrics_db_path, model_id, metrics_json)
-            except sqlite3.Error as e:
-                print(f"\nSQLite error: \n\n{e}\n")
-            except Exception as e:
-                print(f"\nMetrics to database failed: \n\n{e}\n")
-
-            # Logs the summary table to the MLflow run
-            mlflow.log_artifact(Path("temp") / "summary_table.csv", run_id = run.info.run_id)
+        # Logs the summary table to the MLflow run
+        mlflow.log_artifact(Path("temp") / "summary_table.csv", run_id = run.info.run_id)
 
 
 # --- 1. Define the Objective Function ---
@@ -365,7 +387,7 @@ def objective(trial):
         
         # This section checks to run inference if the inference path is provided
         # As well checks if the returns flag is set and converts the data back to candlesticks
-        run_pipeline(run, METRICS_DB_PATH, model_id, llm_model, args, INF_PATH, trial_dict, experiment_name)
+        run_pipeline(run, client, METRICS_DB_PATH, model_id, llm_model, args, INF_PATH, trial_dict, experiment_name)
 
         # Checks if the validation metric is 0
         if final_metric == 0:

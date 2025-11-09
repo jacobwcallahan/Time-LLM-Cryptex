@@ -35,7 +35,7 @@ categorical:
   pred_len: [7, 14]
   num_tokens: [100, 500, 1000]
   loss: ["MSE"]
-  lradj: ["TST","type1","COS"]
+  lradj: ["TST","type1","COS", "type3"]
   n_heads: [2, 4, 8, 16]
   d_ff: [32, 64, 128, 256]
   batch_size: [8,16]

@@ -1,4 +1,5 @@
 import subprocess
+from datetime import datetime
 import pandas as pd
 import numpy as np
 import mlflow
@@ -6,25 +7,118 @@ import os
 import sqlite3
 import json
 from pathlib import Path
+import warnings
+import mlflow
 
-def perform_inference(model_id, llm_model, inf_path, save_path, experiment_name):
-    """
-    Pipeline for the TimeLLM model.
+def run_inference(model_id, 
+        mlflow_client,
+        experiment_name,
+        dataset_path = Path("/mnt/nfs/datasets/"), 
+        granularity = 'daily', 
+        aggregate = 1, 
+        start_date = None, 
+        end_date = None, 
+        save_path = None):
 
-    args:
-        model_id: model id
-        llm_model: llm model
-        inf_path: path to the inference data
-        save_path: path to save the inference data
     """
+    Runs the inference pipeline for the model.
+    
+    Args:
+        model_id: MLflow model id
+        mlflow_client: mlflow client
+        experiment_name: name of the experiment
+        dataset_path: path to the dataset (default: /mnt/nfs/datasets/)
+        granularity: granularity of the data (default: daily)
+        aggregate: aggregate the data to the specified granularity (default: 1)
+        start_date: start date of the data (format: YYYY-MM-DD)
+        end_date: end date of the data (format: YYYY-MM-DD)
+        save_path: path to save the inference data (default: temp folder)
+    
+    Returns:
+        path to the inference data
+    """
+
+    os.makedirs("temp", exist_ok=True)
+
+    # Sets the save path for the inference data
+    if save_path is None:
+        inf_save_path = Path("temp")   # Folder name for the inference data
+    else:
+        inf_save_path = Path(save_path)
+
+
+    org_inf_path = Path("temp") / "org_inf_data.csv"  # Path to the orginal data to be inferenced
+
+    dataset_path = Path(dataset_path)
+
+    # Sets the dataset path based on the granularity
+    if granularity.lower() in ['daily', 'd']:
+        dataset_path = dataset_path / "candlesticks-D.csv"
+    elif granularity.lower() in ['hourly', 'h']:
+        dataset_path = dataset_path / "candlesticks-h.csv"
+    elif granularity.lower() in ['weekly', 'w']:
+        dataset_path = dataset_path / "candlesticks-W.csv"
+    elif granularity.lower() in ['minute', 'min']:
+        dataset_path = dataset_path / "candlesticks-Min.csv"
+
+    inf_data = pd.read_csv(dataset_path)
+    
+    # Filters the data based on the start and end dates
+    if not start_date and not end_date:
+        warnings.warn("No start or end date provided. Using the entire dataset.")
+    
+    if start_date:
+        start_date = datetime.strptime(start_date, '%Y-%m-%d').timestamp()
+        
+        inf_data = inf_data[inf_data['timestamp'] >= start_date]
+
+    if end_date:
+        end_date = datetime.strptime(end_date, '%Y-%m-%d').timestamp()
+        
+        inf_data = inf_data[inf_data['timestamp'] <= end_date]
+        
+    if aggregate > 1:
+        inf_data = aggregate_data(inf_data, aggregate)
+
+    inf_data.to_csv(org_inf_path, index=False)
+    inf_data.to_csv(Path(inf_save_path) / "inference.csv", index=False)
+
+    experiment = mlflow_client.get_experiment_by_name(experiment_name)
+    
+    runs = mlflow_client.search_runs(
+        experiment_ids=[experiment.experiment_id],
+        filter_string=f"tags.mlflow.runName = '{model_id}'"
+    )
+    
+    run = runs[0]
+
+    if run.data.params['target'] == 'returns':
+
+        convert_to_returns(Path(inf_save_path) / "inference.csv")
+    
+
+    llm_model = run.data.params['llm_model']
+    
     print("\n==============================================")
-    print(f"\nRunning inference for {model_id} with {llm_model} on {inf_path}")
+    print(f"\nRunning inference for {model_id} with {llm_model}")
     print("\n==============================================\n")
 
+    inf_path = Path(inf_save_path) / "inference.csv"
+    try:
+        cmd = f"python run_inference.py --model_id {model_id} --llm_model {llm_model} --data_path {inf_path} --save_path {inf_save_path} --experiment_name {experiment_name}"
+        subprocess.run(cmd, shell=True)
+    except Exception as e:
+        print(f"Error running inference: {e}")
+        raise ValueError(f"Error running inference: \n{e}")
 
-    cmd = f"python run_inference.py --model_id {model_id} --llm_model {llm_model} --data_path {inf_path} --save_path {save_path} --experiment_name {experiment_name}"
-    subprocess.run(cmd, shell=True)
-
+    inf_data = pd.read_csv(inf_path)
+    if run.data.params['target'] == 'returns':
+        convert_back_to_candlesticks(original_data_path = org_inf_path, # Original Candlestick Data Path
+                                        inferenced_data_path = inf_path, 
+                                        num_predictions = int(run.data.params['pred_len']))
+    
+    return inf_path  
+    
 
 def perform_backtest(inf_output_path, optimize=False):
     """
@@ -47,7 +141,7 @@ def perform_backtest(inf_output_path, optimize=False):
     subprocess.run(cmd, shell=True)
 
 
-def inf_analysis(inf_path):
+def get_mda_vals(inf_path, target = 'close'):
     """
     Perform analysis on the inference data.
 
@@ -63,7 +157,7 @@ def inf_analysis(inf_path):
 
     
     for pred in range(1, pred_len+1):
-        pred_col = f'close_predicted_{pred}'
+        pred_col = f'{target}_predicted_{pred}'
         
         if pred_col not in data.columns:
             print(f"Column {pred_col} not found in data.")
@@ -85,10 +179,10 @@ def inf_analysis(inf_path):
             future_idx = idx + pred
             
             # Check if future actual value exists in the dataframe
-            if future_idx < len(data) and pd.notna(data['close'].iloc[future_idx]):
-                current_actual = data['close'].iloc[idx]
+            if future_idx < len(data) and pd.notna(data[target].iloc[future_idx]):
+                current_actual = data[target].iloc[idx]
                 predicted_value = data[pred_col].iloc[idx]
-                future_actual = data['close'].iloc[future_idx]
+                future_actual = data[target].iloc[future_idx]
                 
                 # Calculate directions
                 predicted_direction = predicted_value - current_actual
@@ -108,6 +202,33 @@ def inf_analysis(inf_path):
 
     return mda_vals
 
+def get_mse_vals(inf_path, target = 'close'):
+    """
+    Get the MSE values for the inference data.
+
+    args:
+        inf_path: path to the inference data
+        target: target column
+    """
+    data = pd.read_csv(inf_path)
+    pred_len = data.columns.str.contains('predicted').sum()
+    mse_vals = {}
+
+    errors = {f'pred_{pred}': [] for pred in range(1, 25)}
+    pred_len = 24
+    for i in range(len(data) - pred_len):
+        row = data.iloc[i]
+        for pred in range(1, pred_len+1):
+            next_row = data.iloc[i+pred]
+            if pd.notna(row[f'{target}_predicted_{pred}']):
+                error = row[f'{target}_predicted_{pred}'] - next_row[target]
+                sq_error = error ** 2
+                errors[f'pred_{pred}'].append(sq_error)
+
+    for pred in range(1, 25):
+        mse_vals[f'inf_pred_{pred}_mse'] = np.mean(errors[f'pred_{pred}'])
+
+    return mse_vals
 
 def create_metrics_json(mlflow_run_id, llm_model, experiment_name, summary_table, mda_vals, trial_dict):
     """
@@ -194,6 +315,10 @@ def aggregate_data(data, aggregate):
     returns:
         Path to the aggregated data file (save_path)
     """
+    if aggregate <= 1:
+        warnings.warn("Aggregate period is 1 or less. Returning original data.")
+        return data
+
     if 'timestamp' not in data:
         raise ValueError("Missing 'timestamp' column")
 
@@ -263,7 +388,7 @@ def convert_to_returns(data_path, keep_high_low=False, keep_volume=True, log_ret
 
     return data_path
 
-def convert_back_to_candlesticks(original_data_path, inferenced_data_path, num_predictions):
+def convert_back_to_candlesticks(original_data_path, inferenced_data_path, num_predictions: int):
     """
     Convert returns data back to candlesticks. This is used to backtest the model.
     Writes the inferenced data to the inferenced data path.
@@ -271,6 +396,7 @@ def convert_back_to_candlesticks(original_data_path, inferenced_data_path, num_p
     args:
         original_data_path: path to the original candlestick data 
         inferenced_data_path: path to save the inferenced data
+        num_predictions: number of predictions to convert back to candlesticks
     """
     if not os.path.exists(Path(inferenced_data_path)):
         raise ValueError(f"Inference data path {inferenced_data_path} does not exist.")
