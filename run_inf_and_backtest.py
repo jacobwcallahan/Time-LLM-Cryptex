@@ -1,3 +1,16 @@
+"""
+Runs the inference and backtest for a given model and experiment. Logs the metrics to the MLflow server.
+Arguments:
+    --model_name: Model Name
+    --experiment_name: Experiment Name
+    --granularity: Granularity default is daily
+    --aggregate: Aggregate default is 1
+    --start_date: Start Date default is None
+    --end_date: End Date default is None
+    --dataset_path: Dataset Path default is /mnt/nfs/datasets/
+    --save_path: Save Path default is temp folder
+"""
+
 from utils.pipeline import run_inference, perform_backtest, get_mda_vals
 import argparse
 import mlflow
@@ -24,9 +37,17 @@ def parse_args():
     parser.add_argument('--save_path', type=str, required=False, default='temp', help='Save Path default is temp folder')
     return parser.parse_args()
 
-def main(model_name, experiment_name, granularity, aggregate, start_date, end_date, dataset_path, save_path):
+def run_inference_and_backtest(model_name, experiment_name, granularity, aggregate, start_date, end_date, dataset_path, save_path):
     client = mlflow.tracking.MlflowClient()
-    inf_output_path = run_inference(model_name, client, experiment_name, dataset_path, granularity, aggregate, start_date, end_date, save_path)
+    inf_output_path = run_inference(model_id = model_name, 
+                                    mlflow_client = client, 
+                                    experiment_name = experiment_name, 
+                                    dataset_path = dataset_path, 
+                                    granularity = granularity, 
+                                    aggregate = aggregate, 
+                                    start_date = start_date, 
+                                    end_date = end_date, 
+                                    save_path = save_path)
     
     mlflow.log_artifact(inf_output_path, artifact_path="inference")
 
@@ -43,11 +64,11 @@ def main(model_name, experiment_name, granularity, aggregate, start_date, end_da
     perform_backtest(inf_output_path)
     summary_table = pd.read_csv(Path("temp") / "summary_table.csv")
     print(summary_table)
-    
+
     summary_table_path = Path("temp") / "summary_table.csv"
     summary_table.to_csv(summary_table_path, index=False)
     mlflow.log_artifact(summary_table_path, artifact_path="summary_table")
 
 if __name__ == "__main__":
     args = parse_args()
-    main(args.model_name, args.experiment_name, args.granularity, args.aggregate, args.start_date, args.end_date, args.dataset_path, args.save_path)
+    run_inference_and_backtest(args.model_name, args.experiment_name, args.granularity, args.aggregate, args.start_date, args.end_date, args.dataset_path, args.save_path)

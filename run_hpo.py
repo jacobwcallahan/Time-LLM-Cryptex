@@ -1,3 +1,32 @@
+"""
+Runs the hyperparameter optimization for a given model and experiment.
+Logs the metrics to the MLflow server.
+
+It uses the Optuna library to run the hyperparameter optimization.
+It uses the MLflow server to log the metrics.
+
+The optuna configuration is stored in the ./config/optuna_vars.yaml file.
+This can be changed to use a different configuration file in the config folder.
+
+Arguments:
+    --gpu: GPU to use. Default is 1
+    --study_name: Study Name default is empty
+    --granularity: Granularity default is daily
+    --start: Start Date default is None
+    --end: End Date default is None
+    --inf_start: Start Date for inference default is None
+    --inf_end: End Date for inference default is None
+    --data_path: Data Path default is None
+    --returns: If True, converts the data to returns. Default is False
+    --backtest: If True, runs the backtest. Default is False
+    --experiment_name: Experiment Name default is None
+    --trials: Number of trials to run. Default is 10
+    --aggregate: Aggregate default is 1
+    --no_inf_aggregate: If True, does not aggregate the inference data. Default is False
+    --log_all_metrics: If True, logs all metrics to MLflow. Default is False
+    --yaml_file: YAML file to use for the study. Default is optuna_vars.yaml. Contained in ./config/
+"""
+
 from typing import Any
 import optuna
 import pandas as pd
@@ -27,7 +56,6 @@ os.environ["AWS_ACCESS_KEY_ID"] = "minioadmin"
 os.environ["AWS_SECRET_ACCESS_KEY"] = "minioadmin"
 os.environ["MLFLOW_S3_ENDPOINT_URL"] = f"http://{MLFLOW_SERVER_IP}:9000"
 
-# Optuna
 llm_model = "LLAMA3.1"
 OPTUNA_STORAGE_PATH = "sqlite:////data-fast/nfs/mlflow/optuna_study.db" # Optuna storage path
 METRICS_DB_PATH = "/data-fast/nfs/mlflow/metrics.db" # Metrics database path
@@ -59,7 +87,15 @@ def parse_args():
 
 # Helper function
 def _find_mlflow_run(client, experiment_name, model_id):
-    """Finds an MLflow run based on its name within a given experiment."""
+    """Finds an MLflow run based on its name within a given experiment.
+    Args:
+        client: MLflow client
+        experiment_name: Experiment name
+        model_id: Model id
+
+    Returns:
+        run: MLflow run object
+    """
     experiment = client.get_experiment_by_name(experiment_name)
     if not experiment:
         print(f"Error: MLflow experiment '{experiment_name}' not found.")
@@ -124,6 +160,20 @@ def create_train_cmd(trial_dict, model_id, data_path):
 
 
 def set_optuna_vars(trial, data_path, args):
+    """Sets the optuna variables for the trial into a dictionary.
+    The dictionary is then used as arguments for the run_main.py script.
+    The values are pulled from the optuna_vars.yaml (or given) 
+    file.
+
+    Args:
+        trial: Optuna trial object
+        data_path: Path to the data
+        args: Arguments
+
+    Returns:
+        params: Dictionary of trial parameters
+    """
+
     with open(Path("config") / args.yaml_file, "r") as f:
         config = yaml.safe_load(f)
 
@@ -131,6 +181,8 @@ def set_optuna_vars(trial, data_path, args):
 
     # Categorical parameters
     for name, values in config.get("categorical", {}).items():
+        # If there is only one value, use it twice
+        # This is because Optuna requires two values for categorical parameters
         if len(values) == 1:
             params[name] = trial.suggest_categorical(name, values * 2)
         else:
@@ -138,6 +190,7 @@ def set_optuna_vars(trial, data_path, args):
 
     # Int parameters
     for name, cfg in config.get("int", {}).items():
+        # If step is provided, use it to suggest the int parameter
         if "step" in cfg:
             params[name] = trial.suggest_int(
             name,
@@ -194,15 +247,14 @@ def set_optuna_vars(trial, data_path, args):
     print("--------------------------------\n")
     print("Trial Parameters:")
     for key, value in params.items():
-        print(f"{key}: {value}", end="| ")
+        print(f"{key}: {value}", end=" | ")
     
     print("\n\n--------------------------------")
 
     return params
 
 
-
-def run_pipeline(run, mlflow_client, metrics_db_path, model_id, llm_model, args, inf_path, trial_dict, experiment_name):
+def run_pipeline(run, mlflow_client, metrics_db_path, model_id, llm_model, args, trial_dict, experiment_name):
     """
     Runs the pipeline for the model if the inference path is provided.
     It logs the MDA metric for the first candle, the parameters, and the summary table to the metrics database.
@@ -221,6 +273,7 @@ def run_pipeline(run, mlflow_client, metrics_db_path, model_id, llm_model, args,
 
     inf_save_path = Path("temp")   # Folder name for the inference data
     inf_output_path = Path("temp") / "inference.csv"      # Path to the inference data
+
 
     # Checks to run inference if the inference path is provided
     # As well checks if the returns flag is set and converts the data back to candlesticks
@@ -243,45 +296,55 @@ def run_pipeline(run, mlflow_client, metrics_db_path, model_id, llm_model, args,
         print(f"\nInference failed - Stopping Pipeline: {e}\n")
         return
 
-    try:
-        mda_vals = get_mda_vals(inf_output_path)
-        mse_vals = get_mse_vals(inf_output_path)
-        rmse_vals = {f"RMSE_{key.split('_')[1]}": round((value) ** 0.5, 6) for key, value in mse_vals.items()}
-        try:
-            if args.log_all_metrics:
-                mlflow.log_metrics(mda_vals, step = 1, run_id = run.info.run_id)
-                mlflow.log_metrics(mse_vals, step = 1, run_id = run.info.run_id)
-                mlflow.log_metrics(rmse_vals, step = 1, run_id = run.info.run_id)
-                    
-            else:
-                max_mda = max(mda_vals.values())
-                for key, value in mda_vals.items():
-                    if value == max_mda:
-                        mlflow.log_metric(key = f"Best Inf MDA", value = value, step = 1, run_id = run.info.run_id)
-                        mlflow.log_metric(key = f"Best Inf MDA Candle", value = int(key.split("_")[1]), step = 1, run_id = run.info.run_id)
-                        break
 
-                min_mse = min(mse_vals.values())
-                for key, value in mse_vals.items():
-                    if value == min_mse:
-                        mlflow.log_metric(key = f"Min Inf MSE", value = round(value, 6), step = 1, run_id = run.info.run_id)
-                        mlflow.log_metric(key = f"Min Inf MSE Candle", value = int(key.split("_")[1]), step = 1, run_id = run.info.run_id)
-                        break
-                
-                min_rmse = (min_mse) ** 0.5
-                mlflow.log_metrics(min_rmse, step = 1, run_id = run.info.run_id)
+    mda_vals = get_mda_vals(inf_output_path)
+    
 
-        except Exception as e:  
-            print(f"Metrics log failed: {e}\n")
-    except Exception as e:
-        print(f"Metric Analysis failed: {e}\n")
+    mse_vals = get_mse_vals(Path("temp") / "inference_ret.csv", pred_len = trial_dict['pred_len'], target = trial_dict['target'])
+    rmse_vals = {f"RMSE_{key.split('_')[2]}": round((value) ** 0.5, 6) for key, value in mse_vals.items()}
+
+    # Turns the metrics into dataframes and saves them to the temp folder so they can be logged to the MLflow run as artifacts.
+    pd.DataFrame(list[tuple](mse_vals.items()), columns=['metric', 'value']).to_csv(Path("temp") / "mse_metrics.csv", index=False)
+    pd.DataFrame(list[tuple](rmse_vals.items()), columns=['metric', 'value']).to_csv(Path("temp") / "rmse_metrics.csv", index=False)
+
+    if args.log_all_metrics:
+        mlflow.log_metrics(mda_vals, step = 1, run_id = run.info.run_id)
+        mlflow.log_metrics(mse_vals, step = 1, run_id = run.info.run_id)
+        mlflow.log_metrics(rmse_vals, step = 1, run_id = run.info.run_id)
+    else:
+        max_mda = max(mda_vals.values())
+        for key, value in mda_vals.items():
+            if value == max_mda:
+                mlflow.log_metric(key = f"Best Inf MDA", value = value, step = 1, run_id = run.info.run_id)
+                mlflow.log_metric(key = f"Best Inf MDA Candle", value = int(key.split("_")[2]), step = 1, run_id = run.info.run_id)
+                break
+
+        min_mse = min(mse_vals.values())
+        for key, value in mse_vals.items():
+            if value == min_mse:
+                mlflow.log_metric(key = f"Min Inf MSE", value = round(value, 6), step = 1, run_id = run.info.run_id)
+                mlflow.log_metric(key = f"Min Inf MSE Candle", value = int(key.split("_")[2]), step = 1, run_id = run.info.run_id)
+                break
+        
+        min_rmse = {"Min Inf RMSE": round((min_mse) ** 0.5, 6)}
+        mlflow.log_metrics(min_rmse, step = 1, run_id = run.info.run_id)
+
 
 
     try:    
         # Saves the MDA metrics to the MLflow as an artifact then removes the file
-        metrics_path = Path("temp") / "mda_metrics.csv"
-        pd.DataFrame(list[tuple](mda_vals.items()), columns=['metric', 'value']).to_csv(metrics_path, index=False)
-        mlflow.log_artifact(metrics_path, run_id = run.info.run_id)
+        mda_path = Path("temp") / "mda_metrics.csv"
+        pd.DataFrame(list[tuple](mda_vals.items()), columns=['metric', 'value']).to_csv(mda_path, index=False)
+        mlflow.log_artifact(mda_path, run_id = run.info.run_id)
+
+        mse_path = Path("temp") / "mse_metrics.csv"
+        pd.DataFrame(list[tuple](mse_vals.items()), columns=['metric', 'value']).to_csv(mse_path, index=False)
+        mlflow.log_artifact(mse_path, run_id = run.info.run_id)
+
+        rmse_path = Path("temp") / "rmse_metrics.csv"
+        pd.DataFrame(list[tuple](rmse_vals.items()), columns=['metric', 'value']).to_csv(rmse_path, index=False)
+        mlflow.log_artifact(rmse_path, run_id = run.info.run_id)
+
     
     except Exception as e:
         print(f"\nMDA metrics save failed: {e}\n")
@@ -317,6 +380,16 @@ def objective(trial):
     Defines one trial in the Optuna study.
     Optuna will suggest hyperparameter values, which we use to launch run_main.py.
     The function returns the metric we want to optimize (e.g., validation loss).
+
+    It also runs the pipeline for the model if the inference path is provided.
+    It logs the MDA metric for the first candle, the parameters, and the summary table to the metrics database.
+    Also logs the summary table to the MLflow run.
+
+    Args:
+        trial: Optuna trial object
+
+    Returns:
+        final_metric: Final metric value
     """
 
     # Sets the optuna variables
@@ -345,7 +418,7 @@ def objective(trial):
     # --- Dynamic/Conditional Parameters ---
     # Generate a unique model_id for each trial
     trial_id = str(uuid.uuid4())[:8]
-    model_id = f"trial_{trial_id}_{args.granularity if args.data_path is None else args.data_path}_{args.data_path if args.data_path is not None else 'full'}_dates_{trial_dict['dates']}_features_{trial_dict['features']}_seq_{trial_dict['seq_len']}"
+    model_id = f"trial_{trial_id}_{args.granularity}_{args.data_path if args.data_path is not None else 'full'}_dates_{trial_dict['dates']}_features_{trial_dict['features']}_seq_{trial_dict['seq_len']}"
 
     # Set the experiment name
     experiment_name = trial_dict['experiment_name']
@@ -365,7 +438,6 @@ def objective(trial):
             warnings.warn("Backtest flag is set but no inference date is provided. - Will not perform backtest.")
 
         # Creates the command to train the model
-        
         cmd = create_train_cmd(trial_dict, model_id, train_path)
         print(f"\n--- Starting Trial {trial.number} ---\n{' '.join(cmd)}\n")
 
@@ -376,10 +448,10 @@ def objective(trial):
 
         run = _find_mlflow_run(client, experiment_name, model_id)
 
-        run.log_param("granularity", args.granularity)
-        run.log_param("start", args.start)
-        run.log_param("end", args.end)
-        run.log_param("aggregate", args.aggregate)
+        client.log_param(run_id = run.info.run_id, key = "granularity", value = args.granularity)
+        client.log_param(run_id = run.info.run_id, key = "start date", value = args.start)
+        client.log_param(run_id = run.info.run_id, key = "end date", value = args.end)
+        client.log_param(run_id = run.info.run_id, key = "aggregate", value = args.aggregate)
         
         
         if not run:
@@ -400,7 +472,7 @@ def objective(trial):
         
         # This section checks to run inference if the inference path is provided
         # As well checks if the returns flag is set and converts the data back to candlesticks
-        run_pipeline(run, client, METRICS_DB_PATH, model_id, llm_model, args, INF_PATH, trial_dict, experiment_name)
+        run_pipeline(run, client, METRICS_DB_PATH, model_id, llm_model, args, trial_dict, experiment_name)
 
         # Checks if the validation metric is 0
         if final_metric == 0:
@@ -525,6 +597,6 @@ if __name__ == "__main__":
     for key, value in trial.params.items():
         print(f"    {key}: {value}")
 
-    if os.path.exists("temp"):
-        shutil.rmtree("temp")
+    # if os.path.exists("temp"):
+    #     shutil.rmtree("temp")
 

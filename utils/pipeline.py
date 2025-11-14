@@ -1,3 +1,19 @@
+"""
+Utility functions for the pipeline.
+As well as functions for the Metrics database.
+
+Functions:
+    run_inference: Runs the inference pipeline for the model.
+    perform_backtest: Performs the backtest on the inference data.
+    get_mda_vals: Gets the MDA values for the inference data.
+    get_mse_vals: Gets the MSE values for the inference data.
+    create_metrics_json: Creates the metrics JSON for the MLflow run.
+    metrics_to_db: Saves the metrics to the database.
+    aggregate_data: Aggregates the data to the specified granularity.
+    convert_to_returns: Converts the OHLCV data to returns.
+    convert_back_to_candlesticks: Converts the returns data back to OHLCV candlesticks.
+"""
+
 import subprocess
 from datetime import datetime
 import pandas as pd
@@ -112,6 +128,9 @@ def run_inference(model_id,
         raise ValueError(f"Error running inference: \n{e}")
 
     inf_data = pd.read_csv(inf_path)
+
+    inf_data.to_csv(Path("temp") / "inference_ret.csv", index=False)
+
     if run.data.params['target'] == 'returns':
         convert_back_to_candlesticks(original_data_path = org_inf_path, # Original Candlestick Data Path
                                         inferenced_data_path = inf_path, 
@@ -202,31 +221,37 @@ def get_mda_vals(inf_path, target = 'close'):
 
     return mda_vals
 
-def get_mse_vals(inf_path, target = 'close'):
+def get_mse_vals(inf_path, pred_len, target = 'close'):
     """
     Get the MSE values for the inference data.
 
     args:
         inf_path: path to the inference data
+        pred_len: number of predictions to get MSE values for
         target: target column
     """
     data = pd.read_csv(inf_path)
     pred_len = data.columns.str.contains('predicted').sum()
     mse_vals = {}
+    print(data.columns)
+    try:
+        errors = {f'pred_{pred}': [] for pred in range(1, pred_len+1)}
+        for i in range(len(data) - pred_len):
+            row = data.iloc[i]
+            if pd.isna(row['returns_predicted_1']):
+                continue
+            for pred in range(1, pred_len+1):
+                next_row = data.iloc[i+pred]
+                if pd.notna(row[f'{target}_predicted_{pred}']):
+                    error = row[f'{target}_predicted_{pred}'] - next_row[target]
+                    sq_error = error ** 2
+                    errors[f'pred_{pred}'].append(sq_error)
 
-    errors = {f'pred_{pred}': [] for pred in range(1, 25)}
-    pred_len = 24
-    for i in range(len(data) - pred_len):
-        row = data.iloc[i]
         for pred in range(1, pred_len+1):
-            next_row = data.iloc[i+pred]
-            if pd.notna(row[f'{target}_predicted_{pred}']):
-                error = row[f'{target}_predicted_{pred}'] - next_row[target]
-                sq_error = error ** 2
-                errors[f'pred_{pred}'].append(sq_error)
-
-    for pred in range(1, 25):
-        mse_vals[f'inf_pred_{pred}_mse'] = np.mean(errors[f'pred_{pred}'])
+            mse_vals[f'inf_pred_{pred}_mse'] = np.mean(errors[f'pred_{pred}'])
+    except Exception as e:
+        print(f"Error getting MSE values: {e}")
+        raise ValueError(f"Error getting MSE values: {e}")
 
     return mse_vals
 
@@ -404,20 +429,15 @@ def convert_back_to_candlesticks(original_data_path, inferenced_data_path, num_p
     if not os.path.exists(original_data_path):
         raise ValueError(f"Original data path {original_data_path} does not exist.")
 
-    candlesticks = pd.read_csv(original_data_path)
+    result = pd.read_csv(original_data_path)
     predicted_returns = pd.read_csv(inferenced_data_path)
-
-    # Make a copy of the candlesticks data
-    result = candlesticks.copy()
 
     # Get the last known close price before predictions start
     try:
         last_close = result.loc[result.index[predicted_returns['returns_predicted_1'].first_valid_index()-1], 'close']
-    except:
-        print(result.head())
-        print("--------------------------------")
-        print(predicted_returns.head())
-        raise ValueError(f"No valid close price found in the original data.")
+    except Exception as e:
+        print(f"Error getting last close price: {e}\n")
+        raise ValueError(f"Error getting last close price: {e}")
 
     for i in range(1, num_predictions+1):  
         col = f'returns_predicted_{i}'
@@ -435,3 +455,4 @@ def convert_back_to_candlesticks(original_data_path, inferenced_data_path, num_p
 
     return inferenced_data_path
     
+

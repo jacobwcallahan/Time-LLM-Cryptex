@@ -2,9 +2,11 @@
 # It is used to optimize the hyperparameters for the model.
 # python3 run_hpo.py --gpu 2 --study_name minute_15 --granularity minute --yaml_file min_15.yaml --start 2020-01-01 --end 2020-01-15 --inf_start 2021-01-01 --inf_end 2021-01-31 --returns --backtest --experiment_name exp_min_15 --trials 50 --aggregate 15
 
+# python3 run_hpo.py --gpu 4 --study_name 15min_1yr_1yr --granularity min --start 2021-01-01 --end 2021-12-31 --inf_start 2022-01-01 --inf_end 2022-12-31 --returns --backtest --experiment_name 15min_2yr_1yr --trials 50 --aggregate 15 --yaml_file min_15.yaml
+
 categorical:
   features: ["S", "M"]
-  seq_len: [96, 192, 288]
+  seq_len: [192, 288, 384] # 1 day, 2 days, 4 days
   pred_len: [4, 24] # 1 Hour and 6 Hours
   num_tokens: [100, 500, 1000]
   loss: ["MSE"]
