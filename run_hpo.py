@@ -184,6 +184,7 @@ def set_optuna_vars(trial, data_path, args):
         # If there is only one value, use it twice
         # This is because Optuna requires two values for categorical parameters
         if len(values) == 1:
+
             params[name] = trial.suggest_categorical(name, values * 2)
         else:
             params[name] = trial.suggest_categorical(name, values)
@@ -234,10 +235,10 @@ def set_optuna_vars(trial, data_path, args):
 
     params["target"] = "returns" if args.returns else "close"
     params["metric"] = "MDA"
-    params["dates"] = f"{args.start}_{args.end}"
+    #params["dates"] = f"{args.start}_{args.end}"
     params["experiment_name"] = args.experiment_name or llm_model
 
-    trial.set_user_attr("dates", f"{args.start}_{args.end}")
+    #trial.set_user_attr("dates", f"{args.start}_{args.end}")
     trial.set_user_attr("granularity", args.granularity)
     trial.set_user_attr("aggregate", args.aggregate)
     trial.set_user_attr("target", params["target"])
@@ -418,7 +419,7 @@ def objective(trial):
     # --- Dynamic/Conditional Parameters ---
     # Generate a unique model_id for each trial
     trial_id = str(uuid.uuid4())[:8]
-    model_id = f"trial_{trial_id}_{args.granularity}_{args.data_path if args.data_path is not None else 'full'}_dates_{trial_dict['dates']}_features_{trial_dict['features']}_seq_{trial_dict['seq_len']}"
+    model_id = f"trial_{trial_id}_{args.granularity}_{args.data_path if args.data_path is not None else 'full'}_dates_{args.start}_{args.end}_features_{trial_dict['features']}_seq_{trial_dict['seq_len']}"
 
     # Set the experiment name
     experiment_name = trial_dict['experiment_name']

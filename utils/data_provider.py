@@ -9,7 +9,7 @@ class Dataset_Crypto(Dataset):
     size: [seq_len, pred_len] must be provided (defaults handled by argument parser)
     """
     def __init__(self, root_path, data_path='candlesticks-D.csv', flag='train', 
-                 size=None, features='MS', target='close', percent=100, train_val_test_ratio=[0.7, 0.1, 0.2]):
+                 size=None, features='MS', target='close', percent=100, train_val_test_ratio=[0.6, 0.2, 0.2]):
         assert size is not None, 'size (seq_len, pred_len) must be provided.'
         self.seq_len = size[0]  # Length of input sequence
         self.pred_len = size[1] # Length of prediction sequence

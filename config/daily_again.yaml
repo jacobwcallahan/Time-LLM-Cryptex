@@ -1,0 +1,72 @@
+
+# For some context, here is the correlation matrix between (some) hyperparameters and return:
+# llm_layers            -0.01203
+# sequence              -0.21257
+# prediction            -0.01400
+# patch                 -0.27668
+# stride                -0.31313
+# vocab_size             0.08179
+# llm_model_DEEPSEEK    -0.02113
+# llm_model_LLAMA3.1     0.07906
+# llm_model_MISTRAL     -0.09232
+# llm_model_QWEN         0.05585
+# features_MS           -0.08478
+# features_S             0.08478    
+
+## Old parameters 
+# features: "S", "MS", "M"
+# seq_len: 72, 96, 120
+# pred_len: 2
+# num_tokens: 100, 500, 1000
+# loss: "MSE", "MADL", "GMADL", "MADLSTE"
+# lradj: "type1", "type2", "type3", "PEMS", "TST", "constant"
+# n_heads: 2, 4, 8, 16
+# d_ff: 32, 64, 128, 256
+# batch_size: 8, 16, 32
+# patch_len: 12, 16, 24
+# stride: 6, 12
+# epochs: 10
+
+# TO CHANGE THE VARIABLES, YOU MUST HAVE A NEW OPTUNA STUDY NAME
+# python3 run_hpo.py --gpu 4 --study_name daily_search --granularity daily --start 2020-01-01 --end 2022-12-31 --inf_start 2023-01-01 --inf_end 2023-12-31 --returns --backtest --experiment_name daily_search --trials 50 --aggregate 1 --yaml_file daily_again.yaml
+
+
+categorical:
+  features: ["S", "M"]
+  seq_len: [91,182]
+  pred_len: [30]
+  num_tokens: [500, 1000]
+  loss: ["MSE"]
+  lradj: ["TST","type1","COS", "type3"]
+  n_heads: [2, 4, 8, 16]
+  d_ff: [32, 64, 128, 256]
+  batch_size: [8,16]
+  patch_len: [7,14,21]
+  stride: [7, 20]
+  epochs: [20] # Epochs must be more than 1
+
+int:
+  llm_layers:
+    low: 1
+    high: 2
+  d_model:
+    low: 16
+    high: 32
+    step: 16
+
+float:
+  dropout:
+    low: 0.0
+    high: 0.5
+    step: 0.1
+  pct_start:
+    low: 0.1
+    high: 0.5
+    step: 0.1
+  learning_rate:
+    low: 1e-5
+    high: 1e-1
+    log: true
+
+# log_float:
+# Cannot be used if there are no parameters in the section
