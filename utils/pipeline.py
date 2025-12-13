@@ -30,6 +30,7 @@ def run_inference(model_id,
         mlflow_client,
         experiment_name,
         dataset_path = Path("/mnt/nfs/datasets/"), 
+        custom_dataset_path = None,
         granularity = 'daily', 
         aggregate = 1, 
         start_date = None, 
@@ -68,14 +69,17 @@ def run_inference(model_id,
     dataset_path = Path(dataset_path)
 
     # Sets the dataset path based on the granularity
-    if granularity.lower() in ['daily', 'd']:
-        dataset_path = dataset_path / "candlesticks-D.csv"
-    elif granularity.lower() in ['hourly', 'h']:
-        dataset_path = dataset_path / "candlesticks-h.csv"
-    elif granularity.lower() in ['weekly', 'w']:
-        dataset_path = dataset_path / "candlesticks-W.csv"
-    elif granularity.lower() in ['minute', 'min']:
-        dataset_path = dataset_path / "candlesticks-Min.csv"
+    if not custom_dataset_path:
+        if granularity.lower() in ['daily', 'd']:
+            dataset_path = dataset_path / "candlesticks-D.csv"
+        elif granularity.lower() in ['hourly', 'h']:
+            dataset_path = dataset_path / "candlesticks-h.csv"
+        elif granularity.lower() in ['weekly', 'w']:
+            dataset_path = dataset_path / "candlesticks-W.csv"
+        elif granularity.lower() in ['minute', 'min']:
+            dataset_path = dataset_path / "candlesticks-Min.csv"
+    else:
+        dataset_path = custom_dataset_path
 
     inf_data = pd.read_csv(dataset_path)
     
@@ -100,6 +104,8 @@ def run_inference(model_id,
     inf_data.to_csv(Path(inf_save_path) / "inference.csv", index=False)
 
     experiment = mlflow_client.get_experiment_by_name(experiment_name)
+    if experiment is None:
+        raise ValueError(f"Experiment {experiment_name} not found.")
     
     runs = mlflow_client.search_runs(
         experiment_ids=[experiment.experiment_id],
@@ -238,7 +244,7 @@ def get_mse_vals(inf_path, pred_len, target = 'close'):
         errors = {f'pred_{pred}': [] for pred in range(1, pred_len+1)}
         for i in range(len(data) - pred_len):
             row = data.iloc[i]
-            if pd.isna(row['returns_predicted_1']):
+            if pd.isna(row[f'{target}_predicted_1']):
                 continue
             for pred in range(1, pred_len+1):
                 next_row = data.iloc[i+pred]

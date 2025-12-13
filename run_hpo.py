@@ -82,6 +82,7 @@ def parse_args():
     parser.add_argument('--no_inf_aggregate', action='store_true', help='By default, aggregates inference data. Set this flag to disable aggregation.')
     parser.add_argument('--log_all_metrics', action='store_true', help='By default, logs only the best metric to MLflow. Set this flag to log all metrics (still logs as artifacts).')
     parser.add_argument('--yaml_file', type=str, default='optuna_vars.yaml', help='YAML file to use for the study. Default is optuna_vars.yaml. Contained in ./config/')
+    parser.add_argument('--volatility', action='store_true', help='If True, uses the volatility target.')
     return parser.parse_args()
   
 
@@ -152,7 +153,7 @@ def create_train_cmd(trial_dict, model_id, data_path):
         '--data', 'CRYPTEX',
         '--root_path', ".",
         '--data_path', str(data_path),
-        '--target', "volatility", #str(trial_dict['target']),
+        '--target', str(trial_dict['target']),
         '--train_epochs', str(trial_dict['epochs']),
         '--experiment_name', trial_dict['experiment_name'],
     ]
@@ -234,6 +235,7 @@ def set_optuna_vars(trial, data_path, args):
 
 
     params["target"] = "returns" if args.returns else "close"
+    params['target'] = "volatility" if args.volatility else params["target"]
     params["metric"] = "MSE"
     #params["dates"] = f"{args.start}_{args.end}"
     params["experiment_name"] = args.experiment_name or llm_model

@@ -37,12 +37,13 @@ def parse_args():
     parser.add_argument('--save_path', type=str, required=False, default='temp', help='Save Path default is temp folder')
     return parser.parse_args()
 
-def run_inference_and_backtest(model_name, experiment_name, granularity, aggregate, start_date, end_date, dataset_path, save_path):
+def run_inference_and_backtest(model_name, experiment_name, granularity, aggregate, start_date, end_date, dataset_path,custom_dataset_path, save_path, asset = None):
     client = mlflow.tracking.MlflowClient()
     inf_output_path = run_inference(model_id = model_name, 
                                     mlflow_client = client, 
                                     experiment_name = experiment_name, 
                                     dataset_path = dataset_path, 
+                                    custom_dataset_path = custom_dataset_path,
                                     granularity = granularity, 
                                     aggregate = aggregate, 
                                     start_date = start_date, 
@@ -55,19 +56,24 @@ def run_inference_and_backtest(model_name, experiment_name, granularity, aggrega
     for metric, value in mda_vals.items():
         print(f"{metric}: {value}")
     try:
-        mda_vals_path = Path("temp") / "mda_vals.csv"
+        if asset is not None:
+            mda_vals_path = Path(save_path) / f"{asset}_mda_vals.csv"
+        else:
+            mda_vals_path = Path(save_path) / "mda_vals.csv"
         pd.DataFrame(list[tuple](mda_vals.items()), columns=['metric', 'value']).to_csv(mda_vals_path, index=False)
-        mlflow.log_artifact(mda_vals_path, artifact_path="mda_metrics")
+        mlflow.log_artifact(mda_vals_path, artifact_path=f"{asset}_mda_metrics" if asset is not None else "mda_metrics")
     except Exception as e:
         print(f"\nMDA metrics save failed: {e}\n")
 
     perform_backtest(inf_output_path)
-    summary_table = pd.read_csv(Path("temp") / "summary_table.csv")
+    if asset is not None:
+        summary_table_path = Path(save_path) / f"{asset}_summary_table.csv"
+    else:
+        summary_table_path = Path(save_path) / "summary_table.csv"
+    summary_table = pd.read_csv(summary_table_path)
     print(summary_table)
-
-    summary_table_path = Path("temp") / "summary_table.csv"
     summary_table.to_csv(summary_table_path, index=False)
-    mlflow.log_artifact(summary_table_path, artifact_path="summary_table")
+    mlflow.log_artifact(summary_table_path, artifact_path=f"{asset}_summary_table" if asset is not None else "summary_table")
 
 if __name__ == "__main__":
     args = parse_args()
