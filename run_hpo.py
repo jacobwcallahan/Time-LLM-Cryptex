@@ -428,7 +428,7 @@ if __name__ == "__main__":
 
     if args.data_path is not None: # If the data path is provided, uses the data path
         full_data = pd.read_csv(args.data_path)
-        inf_data = pd.read_csv(DATASET_PATH)
+        inf_data = pd.read_csv(args.data_path)
     else:
         full_data = pd.read_csv(DATASET_PATH)
         inf_data = full_data.copy()
@@ -446,7 +446,6 @@ if __name__ == "__main__":
     
     # If inference is enabled, we need to filter the inference data based on the inference start and end dates
     if INFERENCE:
-        inf_data = pd.read_csv(DATASET_PATH)
 
         if args.inf_start:
             inf_data = inf_data[inf_data['timestamp'] >= datetime.strptime(args.inf_start, '%Y-%m-%d').timestamp()]
