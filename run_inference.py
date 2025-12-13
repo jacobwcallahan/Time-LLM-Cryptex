@@ -73,16 +73,9 @@ def main():
 
 
     # Allow CLI override for data_path
-    if cli_args.data_path: 
-        args.data_path = cli_args.data_path
-        # When data_path is overridden via CLI, use it directly without prepending root_path
-        data_file_path = cli_args.data_path
-    else:
-        # Use the original root_path + data_path combination for non-overridden cases
-        data_file_path = os.path.join(args.root_path, args.data_path)
-    
+    if cli_args.data_path: args.data_path = cli_args.data_path
     # Load the full input data CSV
-    df_raw = pd.read_csv(data_file_path)
+    df_raw = pd.read_csv(os.path.join(args.root_path, args.data_path))
     # Ensure columns are ordered: timestamp, features..., target
     df_raw['timestamp'] = pd.to_datetime(df_raw['timestamp'], unit='s') # Convert from UNIX to datetime
     feature_cols = [col for col in df_raw.columns if col not in ['timestamp', args.target]]
