@@ -32,8 +32,8 @@
 
 
 categorical:
-  features: ["S", "M"]
-  seq_len: [182]
+  features: ["S"]
+  seq_len: [180]
   pred_len: [14]
   num_tokens: [500, 1000]
   loss: ["MSE"]
@@ -43,7 +43,7 @@ categorical:
   batch_size: [8,16]
   patch_len: [7,14,21]
   stride: [7, 20]
-  epochs: [50] # Epochs must be more than 1
+  epochs: [20] # Epochs must be more than 1
 
 int:
   llm_layers:

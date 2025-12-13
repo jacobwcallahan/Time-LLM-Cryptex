@@ -152,7 +152,7 @@ def create_train_cmd(trial_dict, model_id, data_path):
         '--data', 'CRYPTEX',
         '--root_path', ".",
         '--data_path', str(data_path),
-        '--target', trial_dict['target'],
+        '--target', "volatility", #str(trial_dict['target']),
         '--train_epochs', str(trial_dict['epochs']),
         '--experiment_name', trial_dict['experiment_name'],
     ]
@@ -234,7 +234,7 @@ def set_optuna_vars(trial, data_path, args):
 
 
     params["target"] = "returns" if args.returns else "close"
-    params["metric"] = "MDA"
+    params["metric"] = "MSE"
     #params["dates"] = f"{args.start}_{args.end}"
     params["experiment_name"] = args.experiment_name or llm_model
 
@@ -243,7 +243,7 @@ def set_optuna_vars(trial, data_path, args):
     trial.set_user_attr("aggregate", args.aggregate)
     trial.set_user_attr("target", params["target"])
     trial.set_user_attr("data_type", "returns" if args.returns else "ohlcv")
-    trial.set_user_attr("metric", "MDA")
+    trial.set_user_attr("metric", "MSE")
     
     print("--------------------------------\n")
     print("Trial Parameters:")
@@ -600,4 +600,3 @@ if __name__ == "__main__":
 
     # if os.path.exists("temp"):
     #     shutil.rmtree("temp")
-
