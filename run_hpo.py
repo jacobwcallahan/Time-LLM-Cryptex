@@ -302,8 +302,12 @@ def run_pipeline(run, mlflow_client, metrics_db_path, model_id, llm_model, args,
 
     mda_vals = get_mda_vals(inf_output_path)
     
+    if args.returns:
+        inf_output_path = Path("temp") / "inference_ret.csv"
+    else:
+        inf_output_path = Path("temp") / "inference.csv"
 
-    mse_vals = get_mse_vals(Path("temp") / "inference_ret.csv", pred_len = trial_dict['pred_len'], target = trial_dict['target'])
+    mse_vals = get_mse_vals(inf_output_path, pred_len = trial_dict['pred_len'], target = trial_dict['target'])
     rmse_vals = {f"RMSE_{key.split('_')[2]}": round((value) ** 0.5, 6) for key, value in mse_vals.items()}
 
     # Turns the metrics into dataframes and saves them to the temp folder so they can be logged to the MLflow run as artifacts.
@@ -430,7 +434,6 @@ def objective(trial):
     # We use MLflow to get the result of the trial.
     # This is more robust than parsing stdout.
     client = mlflow.tracking.MlflowClient()
-    
 
     
     # We need to find the MLflow run associated with this trial.
@@ -538,7 +541,7 @@ if __name__ == "__main__":
 
     if args.data_path is not None: # If the data path is provided, uses the data path
         full_data = pd.read_csv(args.data_path)
-        inf_data = pd.read_csv(DATASET_PATH)
+        inf_data = pd.read_csv(args.data_path)
     else:
         full_data = pd.read_csv(DATASET_PATH)
         inf_data = full_data.copy()
@@ -556,7 +559,6 @@ if __name__ == "__main__":
     
     # If inference is enabled, we need to filter the inference data based on the inference start and end dates
     if INFERENCE:
-        inf_data = pd.read_csv(DATASET_PATH)
 
         if args.inf_start:
             inf_data = inf_data[inf_data['timestamp'] >= datetime.strptime(args.inf_start, '%Y-%m-%d').timestamp()]

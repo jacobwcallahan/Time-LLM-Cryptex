@@ -65,16 +65,28 @@ def run_inference_and_backtest(model_name, experiment_name, granularity, aggrega
     except Exception as e:
         print(f"\nMDA metrics save failed: {e}\n")
 
-    perform_backtest(inf_output_path)
+    perform_backtest(inf_output_path, save_path = save_path)
     if asset is not None:
-        summary_table_path = Path(save_path) / f"{asset}_summary_table.csv"
+        summary_table_path = Path(save_path) / f"summary_table.csv"
     else:
         summary_table_path = Path(save_path) / "summary_table.csv"
     summary_table = pd.read_csv(summary_table_path)
     print(summary_table)
     summary_table.to_csv(summary_table_path, index=False)
-    mlflow.log_artifact(summary_table_path, artifact_path=f"{asset}_summary_table" if asset is not None else "summary_table")
+    mlflow.log_artifact(summary_table_path, 
+                        artifact_path=f"{asset}_summary_table" if asset is not None else "summary_table",
+                        run_id = model_name)
 
 if __name__ == "__main__":
     args = parse_args()
-    run_inference_and_backtest(args.model_name, args.experiment_name, args.granularity, args.aggregate, args.start_date, args.end_date, args.dataset_path, args.save_path)
+    run_inference_and_backtest(
+        args.model_name, 
+        args.experiment_name, 
+        args.granularity, 
+        args.aggregate, 
+        args.start_date, 
+        args.end_date, 
+        args.dataset_path, 
+        args.custom_dataset_path, 
+        args.save_path, 
+        args.asset)

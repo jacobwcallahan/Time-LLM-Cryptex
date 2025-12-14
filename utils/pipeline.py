@@ -145,7 +145,7 @@ def run_inference(model_id,
     return inf_path  
     
 
-def perform_backtest(inf_output_path, optimize=False):
+def perform_backtest(inf_output_path, optimize=False, save_path = "temp"):
     """
     Perform backtest on the inference data.
     This function saves the summary table to the temp folder.
