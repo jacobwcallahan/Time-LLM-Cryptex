@@ -17,3 +17,4 @@ optuna-dashboard
 psycopg2-binary
 boto3
 backtrader
+gradio

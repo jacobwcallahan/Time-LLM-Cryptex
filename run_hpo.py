@@ -160,7 +160,7 @@ def create_train_cmd(trial_dict, model_id, data_path):
     return cmd
 
 
-def set_optuna_vars(trial, data_path, args):
+def set_optuna_vars(trial, data_path, yaml_file):
     """Sets the optuna variables for the trial into a dictionary.
     The dictionary is then used as arguments for the run_main.py script.
     The values are pulled from the optuna_vars.yaml (or given) 
@@ -507,15 +507,30 @@ def objective(trial):
         # Tell Optuna this trial failed and should be pruned.
         raise optuna.exceptions.TrialPruned()
 
-if __name__ == "__main__":
+def main(   
+        gpu = 1, 
+        study_name = '', 
+        granularity = 'daily', 
+        start = None, 
+        end = None, 
+        inf_start = None, 
+        inf_end = None, 
+        data_path = None, 
+        returns = False, 
+        backtest = False, 
+        experiment_name = None, 
+        trials = 10, 
+        aggregate = 1, 
+        no_inf_aggregate = False, 
+        log_all_metrics = False, 
+        yaml_file = 'optuna_vars.yaml', 
+        volatility = False):
     # --- 5. Create and Run the Optuna Study ---
     # The 'study_name' will group your runs. If you restart the script, it will resume.
     # 'storage' tells Optuna to save results to a local SQLite database.
-    args = parse_args()
 
     os.makedirs("temp", exist_ok=True)
     org_data_path = Path("temp/org_data.csv")
-
 
     if args.gpu != '1': # If the GPU is not 1, uses the NFS server for the storage path
         OPTUNA_STORAGE_PATH = f"sqlite:////mnt/nfs/mlflow/optuna_study.db"
@@ -602,5 +617,13 @@ if __name__ == "__main__":
     for key, value in trial.params.items():
         print(f"    {key}: {value}")
 
-    # if os.path.exists("temp"):
-    #     shutil.rmtree("temp")
+    if os.path.exists("temp"):
+        shutil.rmtree("temp")
+
+
+
+if __name__ == "__main__":
+    args = parse_args()
+    main(args.gpu, args.study_name, args.granularity, args.start, args.end, args.inf_start, args.inf_end, args.data_path, args.returns, args.backtest, args.experiment_name, args.trials, args.aggregate, args.no_inf_aggregate, args.log_all_metrics, args.yaml_file, args.volatility)
+
+    

@@ -1,0 +1,62 @@
+categorical:
+  features:
+  - S
+  seq_len:
+  - 180
+  - 144
+  - 168
+  pred_len:
+  - 14
+  num_tokens:
+  - 500
+  - 1000
+  loss:
+  - MSE
+  lradj:
+  - TST
+  - type1
+  - COS
+  - type3
+  n_heads:
+  - 2
+  - 4
+  - 8
+  - 16
+  d_ff:
+  - 32
+  - 64
+  - 128
+  - 256
+  batch_size:
+  - 8
+  - 16
+  patch_len:
+  - 7
+  - 14
+  - 21
+  stride:
+  - 7
+  - 20
+  epochs:
+  - 10
+int:
+  llm_layers:
+    low: 1
+    high: 2
+  d_model:
+    low: 16
+    high: 32
+    step: 16
+float:
+  dropout:
+    low: 0.0
+    high: 0.5
+    step: 0.1
+  pct_start:
+    low: 0.1
+    high: 0.5
+    step: 0.1
+  learning_rate:
+    low: 1.0e-05
+    high: 0.1
+    log: true

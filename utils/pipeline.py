@@ -1,5 +1,5 @@
 """
-Utility functions for the pipeline.
+Utility functions for the pipeline of Training to Inference to Backtesting.
 As well as functions for the Metrics database.
 
 Functions:
@@ -178,8 +178,7 @@ def get_mda_vals(inf_path, target = 'close'):
     data = pd.read_csv(inf_path)
     pred_len = data.columns.str.contains('predicted').sum()
 
-    mda_vals = {}
-
+    mda_vals = {}   
     
     for pred in range(1, pred_len+1):
         pred_col = f'{target}_predicted_{pred}'
