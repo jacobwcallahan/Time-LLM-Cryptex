@@ -236,7 +236,7 @@ def set_optuna_vars(trial, data_path, yaml_file):
 
     params["target"] = "returns" if args.returns else "close"
     params['target'] = "volatility" if args.volatility else params["target"]
-    params["metric"] = "MSE"
+    params["metric"] = "SHARPE"
     #params["dates"] = f"{args.start}_{args.end}"
     params["experiment_name"] = args.experiment_name or llm_model
 
@@ -245,7 +245,7 @@ def set_optuna_vars(trial, data_path, yaml_file):
     trial.set_user_attr("aggregate", args.aggregate)
     trial.set_user_attr("target", params["target"])
     trial.set_user_attr("data_type", "returns" if args.returns else "ohlcv")
-    trial.set_user_attr("metric", "MSE")
+    trial.set_user_attr("metric", "SHARPE")
     
     print("--------------------------------\n")
     print("Trial Parameters:")
