@@ -1,0 +1,40 @@
+categorical:
+  features: ["MS",]
+  seq_len: [7,14,21,28]
+  pred_len: [7] # 1 Hour and 6 Hours
+  num_tokens: [1000]
+  loss: ["SHARPE"]
+  lradj: ["TST","type1","COS"]
+  n_heads: [16]
+  d_ff: [32]
+  batch_size: [64]
+  patch_len: [14]
+  stride: [7]
+  epochs: [10] # Epochs must be more than 1
+
+int:
+  llm_layers:
+    low: 4
+    high: 8
+  d_model:
+    low: 32
+    high: 64
+    step: 16
+  
+
+float:
+  dropout:
+    low: 0.1
+    high: 0.5
+    step: 0.1
+  learning_rate:
+    low: 1e-5
+    high: 1e-3
+    log: true
+  pct_start:
+    low: 0.1
+    high: 0.5
+    step: 0.1
+
+# log_float:
+# Cannot be used if there are no parameters in the section
