@@ -302,7 +302,6 @@ with gr.Blocks(title="Time-LLM-Cryptex HPO Configuration", theme=gr.themes.Citru
                     inf_start.change(check_inf_after_train, inputs=[end_date, inf_start], outputs=inf_start)
                     start_date.change(start_before_end, inputs=[start_date, end_date], outputs=start_date)
                     inf_start.change(start_before_end, inputs=[inf_start, inf_end], outputs=inf_start)
-                    end_date.change(end_after_start, inputs=[end_date, start_date], outputs=end_date)
                     inf_end.change(end_after_start, inputs=[inf_end, inf_start], outputs=inf_end)
             
             with gr.Row():
