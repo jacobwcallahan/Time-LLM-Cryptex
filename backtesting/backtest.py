@@ -590,7 +590,7 @@ class BacktestRunner:
             return pd.DataFrame()
     
 
-def main():
+def parse_args():
     parser = argparse.ArgumentParser(description='AI Trading Strategy Backtester')
     parser.add_argument('--data', required=True, help='Path to CSV file with AI predictions')
     parser.add_argument('--strategy', help='Specific strategy to run (default: all)')
@@ -603,9 +603,13 @@ def main():
     parser.add_argument('--step_days', type=int, default=30, help='Step days for walk-forward')
     parser.add_argument('--pipeline', action='store_true', help='Used to determine if the backtest is from the pipeline. Do not use this flag if you are not running the backtest from the pipeline.')
     
-    args = parser.parse_args()
     
-    runner = BacktestRunner(args.data, cash=args.cash, commission=args.commission, pipeline=args.pipeline)
+
+def main(args_dict):
+    args = parse_args()
+
+    
+    runner = BacktestRunner(args_dict['data'], cash=args_dict['cash'], commission=args_dict['commission'], pipeline=args_dict['pipeline'])
     
     if args.optimize:
         # Optimize specific strategy
@@ -635,4 +639,9 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    args_dict = {}
+    args = parse_args()
+    for arg in args:
+        args_dict[arg] = getattr(args, arg)
+
+    main(args_dict)

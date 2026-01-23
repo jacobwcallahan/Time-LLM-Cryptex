@@ -10,6 +10,7 @@ import subprocess
 import os
 from datetime import datetime
 from helper_fcns import check_inf_after_train, start_before_end, end_after_start
+import backtesting.backtest as bt
 
 # Default prompt from CRYPTEX.txt
 DEFAULT_PROMPT = """The Binance Bitcoin Hourly Returns (BTC-H) dataset captures granular financial data from the Binance.us cryptocurrency exchange. It spans nearly four months, from July 2024 to December 2024, with hourly-level resolution. Each record contains updates for returns of hourly closing prices and traded volume in USD. Timestamps are stored in Unix time format. Inactive periods (with no trading activity) are represented with NaN values, while missing timestamps may reflect exchange/API downtime or data collection limitations. The dataset has been carefully deduplicated and validated, and is updated nightly to ensure consistency and completeness."""
@@ -248,332 +249,463 @@ def save_yaml_config(yaml_content, filename):
 
 
 def run_hpo(command):
-    """Execute the HPO command."""
+    """Execute the HPO command with streaming output."""
     try:
-        # Change to project root directory
         project_root = Path(__file__).parent.parent
-        result = subprocess.run(
+        process = subprocess.Popen(
             command,
             shell=True,
             cwd=project_root,
-            capture_output=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,  # Merge stderr into stdout
             text=True,
-            timeout=3600  # 1 hour timeout
+            bufsize=1  # Line buffered
         )
-        output = f"STDOUT:\n{result.stdout}\n\nSTDERR:\n{result.stderr}"
-        return output
-    except subprocess.TimeoutExpired:
-        return "Error: Command timed out after 1 hour"
+        
+        output = ""
+        for line in iter(process.stdout.readline, ''):
+            output += line
+            yield output
+        
+        process.stdout.close()
+        return_code = process.wait()
+        
+        if return_code != 0:
+            output += f"\n\nProcess exited with code {return_code}"
+            yield output
+            
     except Exception as e:
-        return f"Error: {str(e)}"
+        yield f"Error: {str(e)}"
 
 
 # Build the Gradio interface
-with gr.Blocks(title="Time-LLM-Cryptex HPO Configuration", theme=gr.themes.Citrus()) as app:
-    gr.Markdown("# Time-LLM-Cryptex Hyperparameter Optimization")
-    gr.Markdown("Configure and run hyperparameter optimization for Time-LLM models.")
+with gr.Blocks(title="Time-LLM-Cryptex", theme=gr.themes.Citrus()) as app:
+    gr.Markdown("# Time-LLM-Cryptex")
+    gr.Markdown("Train, run inference, and backtest Time-LLM models for cryptocurrency forecasting.")
     
     with gr.Tabs():
-        # Tab 1: HPO Arguments
-        with gr.TabItem("HPO Arguments"):
-            gr.Markdown("### Run HPO Configuration")
-            with gr.Row():
-                with gr.Column():
-                    gpu = gr.Textbox(label="GPU", value="1", info="GPU to use")
-                    study_name = gr.Textbox(label="Study Name", value=f"{datetime.now().strftime('%m.%d.%y')}_study", info="Optuna study name")
-                    granularity = gr.Dropdown(
-                        label="Granularity",
-                        choices=["daily", "hourly", "weekly", "minute"],
-                        value="daily",
-                        info="Data granularity"
-                    )
-                    experiment_name = gr.Textbox(label="Experiment Name", value=f"{datetime.now().strftime('%m.%d.%y')}_experiment", info="MLflow experiment name")
-                    trials = gr.Number(label="Trials", value=10, info="Number of optimization trials")
-                    aggregate = gr.Number(label="Aggregate", value=1, info="Aggregation period")
-                
-                with gr.Column():
-                    start_date = gr.DateTime(label="Start Date", value="2014-09-17", info="Training start date (YYYY-MM-DD)", include_time=False)
-                    end_date = gr.DateTime(label="End Date", value="2024-02-16", info="Training end date (YYYY-MM-DD)", include_time=False)
-                    inf_start = gr.DateTime(label="Inference Start", value="", info="Inference start date (YYYY-MM-DD)", include_time=False)
-                    inf_end = gr.DateTime(label="Inference End", value="", info="Inference end date (YYYY-MM-DD)", include_time=False)
-                    data_path = gr.Textbox(label="Data Path", value="", info="Custom data path (optional)")
-                    yaml_file = gr.Textbox(label="YAML Config File", value="optuna_vars.yaml", info="Config file in ./config/")
+        # =====================================================================
+        # TAB 1: TRAINING
+        # =====================================================================
+        with gr.TabItem("Training", id="training"):
+            gr.Markdown("## Training & Hyperparameter Optimization")
+            
+            with gr.Tabs():
+                # Sub-tab: HPO Arguments
+                with gr.TabItem("HPO Arguments"):
+                    gr.Markdown("### Run HPO Configuration")
+                    with gr.Row():
+                        with gr.Column():
+                            gpu = gr.Textbox(label="GPU", value="1", info="GPU to use")
+                            study_name = gr.Textbox(label="Study Name", value=f"{datetime.now().strftime('%m.%d.%y')}_study", info="Optuna study name")
+                            granularity = gr.Dropdown(
+                                label="Granularity",
+                                choices=["daily", "hourly", "weekly", "minute"],
+                                value="daily",
+                                info="Data granularity"
+                            )
+                            experiment_name = gr.Textbox(label="Experiment Name", value=f"{datetime.now().strftime('%m.%d.%y')}_experiment", info="MLflow experiment name")
+                            trials = gr.Number(label="Trials", value=10, info="Number of optimization trials")
+                            aggregate = gr.Number(label="Aggregate", value=1, info="Aggregation period")
+                        
+                        with gr.Column():
+                            start_date = gr.DateTime(label="Start Date", value="2014-09-17", info="Training start date (YYYY-MM-DD)", include_time=False)
+                            end_date = gr.DateTime(label="End Date", value="2024-02-16", info="Training end date (YYYY-MM-DD)", include_time=False)
+                            train_inf_start = gr.DateTime(label="Inference Start", value="", info="Inference start date (YYYY-MM-DD)", include_time=False)
+                            train_inf_end = gr.DateTime(label="Inference End", value="", info="Inference end date (YYYY-MM-DD)", include_time=False)
+                            data_path = gr.Textbox(label="Data Path", value="", info="Custom data path (optional)")
+                            yaml_file = gr.Textbox(label="YAML Config File", value="optuna_vars.yaml", info="Config file in ./config/")
 
-                    inf_start.change(check_inf_after_train, inputs=[end_date, inf_start], outputs=inf_start)
-                    start_date.change(start_before_end, inputs=[start_date, end_date], outputs=start_date)
-                    inf_start.change(start_before_end, inputs=[inf_start, inf_end], outputs=inf_start)
-                    inf_end.change(end_after_start, inputs=[inf_end, inf_start], outputs=inf_end)
+                            train_inf_start.change(check_inf_after_train, inputs=[end_date, train_inf_start], outputs=train_inf_start)
+                            start_date.change(start_before_end, inputs=[start_date, end_date], outputs=start_date)
+                            train_inf_start.change(start_before_end, inputs=[train_inf_start, train_inf_end], outputs=train_inf_start)
+                    
+                    with gr.Row():
+                        returns = gr.Checkbox(label="Returns", value=False, info="Train on returns")
+                        backtest = gr.Checkbox(label="Backtest", value=False, info="Run backtest after training")
+                        volatility = gr.Checkbox(label="Volatility", value=False, info="Use volatility target")
+                        no_inf_aggregate = gr.Checkbox(label="No Inference Aggregate", value=False, info="Disable inference aggregation")
+                        log_all_metrics = gr.Checkbox(label="Log All Metrics", value=False, info="Log all metrics to MLflow")
+                
+                # Sub-tab: Model Configuration
+                with gr.TabItem("Model Configuration"):
+                    gr.Markdown("### Categorical Parameters")
+                    gr.Markdown("*Add custom values as comma-separated list (e.g., `64, 128, 256`)*")
+                    with gr.Row():
+                        with gr.Column():
+                            features = gr.CheckboxGroup(
+                                label="Features",
+                                choices=["S", "MS", "M"],
+                                value=["S"],
+                                info="Feature types - S: Univariate → Univariate, M: Multivariate → Multivariate, MS: Multivariate → Univariate"
+                            )
+                            
+                            seq_len = gr.CheckboxGroup(
+                                label="Sequence Length",
+                                choices=["72", "96", "120", "168", "180"],
+                                value=["180"],
+                                info="Input sequence lengths"
+                            )
+                            seq_len_custom = gr.Textbox(
+                                label="Custom Sequence Lengths",
+                                placeholder="e.g., 48, 256",
+                                info="Add custom sequence lengths"
+                            )
+                            
+                            pred_len = gr.CheckboxGroup(
+                                label="Prediction Length",
+                                choices=["2", "7", "14", "21"],
+                                value=["14"],
+                                info="Prediction horizons"
+                            )
+                            pred_len_custom = gr.Textbox(
+                                label="Custom Prediction Lengths",
+                                placeholder="e.g., 1, 28",
+                                info="Add custom prediction lengths"
+                            )
+                            
+                            num_tokens = gr.CheckboxGroup(
+                                label="Number of Tokens",
+                                choices=["100", "500", "1000"],
+                                value=["500", "1000"],
+                                info="Vocabulary sizes"
+                            )
+                            num_tokens_custom = gr.Textbox(
+                                label="Custom Token Counts",
+                                placeholder="e.g., 250, 2000",
+                                info="Add custom vocabulary sizes"
+                            )
+                            batch_size = gr.CheckboxGroup(
+                                label="Batch Size",
+                                choices=["8", "16", "32"],
+                                value=["8", "16"],
+                                info="Training batch sizes"
+                            )
+                            batch_size_custom = gr.Textbox(
+                                label="Custom Batch Sizes",
+                                placeholder="e.g., 4, 64",
+                                info="Add custom batch sizes"
+                            )
+                            
+                            patch_len = gr.CheckboxGroup(
+                                label="Patch Length",
+                                choices=["7", "12", "14", "16", "21", "24"],
+                                value=["7", "14", "21"],
+                                info="Patch lengths"
+                            )
+                            patch_len_custom = gr.Textbox(
+                                label="Custom Patch Lengths",
+                                placeholder="e.g., 4, 32",
+                                info="Add custom patch lengths"
+                            )
+                        
+                        with gr.Column():
+                            loss = gr.CheckboxGroup(
+                                label="Loss Function",
+                                choices=["MSE", "MADL", "GMADL", "MADLSTE", "SHARPE"],
+                                value=["MSE"],
+                                info="Loss functions to try"
+                            )
+                            
+                            lradj = gr.CheckboxGroup(
+                                label="LR Adjustment",
+                                choices=["type1", "type2", "type3", "PEMS", "TST", "COS", "constant"],
+                                value=["TST", "type1", "COS", "type3"],
+                                info="Learning rate schedulers"
+                            )
+                            
+                            n_heads = gr.CheckboxGroup(
+                                label="Attention Heads",
+                                choices=["2", "4", "8", "16"],
+                                value=["2", "4", "8", "16"],
+                                info="Number of attention heads"
+                            )
+                            n_heads_custom = gr.Textbox(
+                                label="Custom Head Counts",
+                                placeholder="e.g., 1, 32",
+                                info="Add custom attention head counts"
+                            )
+                            
+                            d_ff = gr.CheckboxGroup(
+                                label="Feed-Forward Dimension",
+                                choices=["32", "64", "128", "256"],
+                                value=["32", "64", "128", "256"],
+                                info="FFN dimensions"
+                            )
+                            d_ff_custom = gr.Textbox(
+                                label="Custom FFN Dimensions",
+                                placeholder="e.g., 512, 1024",
+                                info="Add custom FFN dimensions"
+                            )
+                            stride = gr.CheckboxGroup(
+                                label="Stride",
+                                choices=["6", "7", "12", "20"],
+                                value=["7", "20"],
+                                info="Stride values"
+                            )
+                            stride_custom = gr.Textbox(
+                                label="Custom Strides",
+                                placeholder="e.g., 4, 14",
+                                info="Add custom stride values"
+                            )
+                            
+                            epochs = gr.CheckboxGroup(
+                                label="Epochs",
+                                choices=["10", "15", "20", "25", "30"],
+                                value=["20"],
+                                info="Training epochs"
+                            )
+                            epochs_custom = gr.Textbox(
+                                label="Custom Epochs",
+                                placeholder="e.g., 5, 50",
+                                info="Add custom epoch counts"
+                            )
+                                        
+                    gr.Markdown("### Integer Parameters (Range)")
+                    with gr.Row():
+                        with gr.Column():
+                            gr.Markdown("**LLM Layers**")
+                            llm_layers_low = gr.Number(label="Low", value=1)
+                            llm_layers_high = gr.Number(label="High", value=2)
+                        
+                        with gr.Column():
+                            gr.Markdown("**D Model**")
+                            d_model_low = gr.Number(label="Low", value=16)
+                            d_model_high = gr.Number(label="High", value=32)
+                            d_model_step = gr.Number(label="Step", value=16)
+                    
+                    gr.Markdown("### Float Parameters (Range)")
+                    with gr.Row():
+                        with gr.Column():
+                            gr.Markdown("**Dropout**")
+                            dropout_low = gr.Number(label="Low", value=0.0)
+                            dropout_high = gr.Number(label="High", value=0.5)
+                            dropout_step = gr.Number(label="Step", value=0.1)
+                        
+                        with gr.Column():
+                            gr.Markdown("**PCT Start**")
+                            pct_start_low = gr.Number(label="Low", value=0.1)
+                            pct_start_high = gr.Number(label="High", value=0.5)
+                            pct_start_step = gr.Number(label="Step", value=0.1)
+                        
+                        with gr.Column():
+                            gr.Markdown("**Learning Rate**")
+                            lr_low = gr.Number(label="Low", value=1e-5)
+                            lr_high = gr.Number(label="High", value=1e-1)
+                            lr_log = gr.Checkbox(label="Log Scale", value=True)
+                
+                # Sub-tab: Prompt Configuration
+                with gr.TabItem("Prompt"):
+                    gr.Markdown("### Dataset Prompt")
+                    gr.Markdown("This prompt describes the dataset and is used by the model for context.")
+                    prompt = gr.Textbox(
+                        label="Prompt",
+                        value=DEFAULT_PROMPT,
+                        lines=10,
+                        info="Edit the prompt that describes your dataset"
+                    )
+                    prompt_filename = gr.Textbox(label="Prompt Filename", value="CRYPTEX.txt")
+                    save_prompt_btn = gr.Button("Save Prompt", variant="secondary")
+                    prompt_status = gr.Textbox(label="Status", interactive=False)
+                    
+                    save_prompt_btn.click(
+                        fn=save_prompt,
+                        inputs=[prompt, prompt_filename],
+                        outputs=prompt_status
+                    )
+                
+                # Sub-tab: Generate & Run
+                with gr.TabItem("Generate & Run"):
+                    gr.Markdown("### Generate Configuration and Command")
+                    
+                    with gr.Row():
+                        generate_cmd_btn = gr.Button("Generate Command", variant="primary")
+                        generate_yaml_btn = gr.Button("Generate YAML", variant="secondary")
+                    
+                    command_output = gr.Textbox(label="Generated Command", lines=3, interactive=True)
+                    yaml_output = gr.Code(label="Generated YAML Configuration", language="yaml", lines=30)
+                    
+                    with gr.Row():
+                        save_yaml_filename = gr.Textbox(label="YAML Filename", value="custom_config.yaml")
+                        save_yaml_btn = gr.Button("Save YAML Config", variant="secondary")
+                    yaml_save_status = gr.Textbox(label="Save Status", interactive=False)
+                    
+                    gr.Markdown("### Execute HPO")
+                    run_train_btn = gr.Button("Run Training", variant="primary")
+                    train_output = gr.Textbox(label="Training Output", lines=20, interactive=False)
+                    
+                    # Wire up the buttons
+                    generate_cmd_btn.click(
+                        fn=build_command,
+                        inputs=[
+                            gpu, study_name, granularity, start_date, end_date,
+                            train_inf_start, train_inf_end, data_path, returns, backtest,
+                            experiment_name, trials, aggregate, no_inf_aggregate,
+                            log_all_metrics, yaml_file, volatility,
+                            features, seq_len, pred_len, num_tokens, loss, lradj,
+                            n_heads, d_ff, batch_size, patch_len, stride, epochs,
+                            llm_layers_low, llm_layers_high,
+                            d_model_low, d_model_high, d_model_step,
+                            dropout_low, dropout_high, dropout_step,
+                            pct_start_low, pct_start_high, pct_start_step,
+                            lr_low, lr_high, lr_log,
+                            prompt
+                        ],
+                        outputs=command_output
+                    )
+                    
+                    generate_yaml_btn.click(
+                        fn=generate_yaml_config,
+                        inputs=[
+                            features,
+                            seq_len, seq_len_custom,
+                            pred_len, pred_len_custom,
+                            num_tokens, num_tokens_custom,
+                            loss,
+                            lradj,
+                            n_heads, n_heads_custom,
+                            d_ff, d_ff_custom,
+                            batch_size, batch_size_custom,
+                            patch_len, patch_len_custom,
+                            stride, stride_custom,
+                            epochs, epochs_custom,
+                            llm_layers_low, llm_layers_high,
+                            d_model_low, d_model_high, d_model_step,
+                            dropout_low, dropout_high, dropout_step,
+                            pct_start_low, pct_start_high, pct_start_step,
+                            lr_low, lr_high, lr_log
+                        ],
+                        outputs=yaml_output
+                    )
+                    
+                    save_yaml_btn.click(
+                        fn=save_yaml_config,
+                        inputs=[yaml_output, save_yaml_filename],
+                        outputs=yaml_save_status
+                    )
+                    
+                    run_train_btn.click(
+                        fn=run_hpo,
+                        inputs=command_output,
+                        outputs=train_output
+                    )
+        
+        # =====================================================================
+        # TAB 2: INFERENCE
+        # =====================================================================
+        with gr.TabItem("Inference", id="inference"):
+            gr.Markdown("## Run Inference")
+            gr.Markdown("Load a trained model and generate predictions on new data.")
             
             with gr.Row():
-                returns = gr.Checkbox(label="Returns", value=False, info="Train on returns")
-                backtest = gr.Checkbox(label="Backtest", value=False, info="Run backtest after training")
-                volatility = gr.Checkbox(label="Volatility", value=False, info="Use volatility target")
-                no_inf_aggregate = gr.Checkbox(label="No Inference Aggregate", value=False, info="Disable inference aggregation")
-                log_all_metrics = gr.Checkbox(label="Log All Metrics", value=False, info="Log all metrics to MLflow")
+                with gr.Column():
+                    inf_model_path = gr.Textbox(
+                        label="Model Path",
+                        placeholder="path/to/checkpoint.pth",
+                        info="Path to the trained model checkpoint"
+                    )
+                    inf_data_path = gr.Textbox(
+                        label="Data Path",
+                        placeholder="path/to/data.csv",
+                        info="Path to the input data for inference"
+                    )
+                    inf_gpu = gr.Textbox(label="GPU", value="0", info="GPU to use for inference")
+                
+                with gr.Column():
+                    inf_start_date = gr.DateTime(
+                        label="Start Date",
+                        value="",
+                        info="Inference start date (YYYY-MM-DD)",
+                        include_time=False
+                    )
+                    inf_end_date = gr.DateTime(
+                        label="End Date",
+                        value="",
+                        info="Inference end date (YYYY-MM-DD)",
+                        include_time=False
+                    )
+                    inf_output_path = gr.Textbox(
+                        label="Output Path",
+                        value="backtesting/data/inference.csv",
+                        info="Path to save inference results"
+                    )
+            
+            run_inference_btn = gr.Button("Run Inference", variant="primary")
+            inference_output = gr.Textbox(label="Inference Output", lines=15, interactive=False)
+            
+            gr.Markdown("### Inference Results")
+            inference_results = gr.Dataframe(
+                label="Predictions",
+                interactive=False
+            )
         
-        # Tab 2: Model Configuration (from YAML)
-        with gr.TabItem("Model Configuration"):
-            gr.Markdown("### Categorical Parameters")
-            gr.Markdown("*Add custom values as comma-separated list (e.g., `64, 128, 256`)*")
+        # =====================================================================
+        # TAB 3: BACKTESTING
+        # =====================================================================
+        with gr.TabItem("Backtesting", id="backtesting"):
+            gr.Markdown("## Backtesting")
+            gr.Markdown("Evaluate model predictions with trading strategies and performance metrics.")
+            
             with gr.Row():
                 with gr.Column():
-                    features = gr.CheckboxGroup(
-                        label="Features",
-                        choices=["S", "MS", "M"],
-                        value=["S"],
-                        info="Feature types - S: Univariate → Univariate, M: Multivariate → Multivariate, MS: Multivariate → Univariate"
+                    bt_inference_path = gr.Textbox(
+                        label="Inference Results Path",
+                        value="backtesting/data/inference.csv",
+                        info="Path to inference results CSV"
+                    )
+                    bt_strategy = gr.Dropdown(
+                        label="Trading Strategy",
+                        choices=["simple_ai", "threshold", "momentum", "mean_reversion"],
+                        value="simple_ai",
+                        info="Select backtesting strategy"
+                    )
+                    bt_initial_capital = gr.Number(
+                        label="Initial Capital",
+                        value=10000,
+                        info="Starting capital for backtest"
+                    )
+                
+                with gr.Column():
+                    bt_start_date = gr.DateTime(
+                        label="Start Date",
+                        value="",
+                        info="Backtest start date",
+                        include_time=False
+                    )
+                    bt_end_date = gr.DateTime(
+                        label="End Date",
+                        value="",
+                        info="Backtest end date",
+                        include_time=False
+                    )
+                    bt_threshold = gr.Number(
+                        label="Threshold",
+                        value=0.0,
+                        info="Prediction threshold for trading signals"
+                    )
+            
+            run_backtest_btn = gr.Button("Run Backtest", variant="primary")
+            backtest_output = gr.Textbox(label="Backtest Output", lines=10, interactive=False)
 
-                    )
-                    
-                    seq_len = gr.CheckboxGroup(
-                        label="Sequence Length",
-                        choices=["72", "96", "120", "168", "180"],
-                        value=["180"],
-                        info="Input sequence lengths"
-                    )
-                    seq_len_custom = gr.Textbox(
-                        label="Custom Sequence Lengths",
-                        placeholder="e.g., 48, 256",
-                        info="Add custom sequence lengths"
-                    )
-                    
-                    pred_len = gr.CheckboxGroup(
-                        label="Prediction Length",
-                        choices=["2", "7", "14", "21"],
-                        value=["14"],
-                        info="Prediction horizons"
-                    )
-                    pred_len_custom = gr.Textbox(
-                        label="Custom Prediction Lengths",
-                        placeholder="e.g., 1, 28",
-                        info="Add custom prediction lengths"
-                    )
-                    
-                    num_tokens = gr.CheckboxGroup(
-                        label="Number of Tokens",
-                        choices=["100", "500", "1000"],
-                        value=["500", "1000"],
-                        info="Vocabulary sizes"
-                    )
-                    num_tokens_custom = gr.Textbox(
-                        label="Custom Token Counts",
-                        placeholder="e.g., 250, 2000",
-                        info="Add custom vocabulary sizes"
-                    )
-                    batch_size = gr.CheckboxGroup(
-                        label="Batch Size",
-                        choices=["8", "16", "32"],
-                        value=["8", "16"],
-                        info="Training batch sizes"
-                    )
-                    batch_size_custom = gr.Textbox(
-                        label="Custom Batch Sizes",
-                        placeholder="e.g., 4, 64",
-                        info="Add custom batch sizes"
-                    )
-                    
-                    patch_len = gr.CheckboxGroup(
-                        label="Patch Length",
-                        choices=["7", "12", "14", "16", "21", "24"],
-                        value=["7", "14", "21"],
-                        info="Patch lengths"
-                    )
-                    patch_len_custom = gr.Textbox(
-                        label="Custom Patch Lengths",
-                        placeholder="e.g., 4, 32",
-                        info="Add custom patch lengths"
-                    )
-                
-                with gr.Column():
-                    loss = gr.CheckboxGroup(
-                        label="Loss Function",
-                        choices=["MSE", "MADL", "GMADL", "MADLSTE"],
-                        value=["MSE"],
-                        info="Loss functions to try"
-                    )
-                    
-                    lradj = gr.CheckboxGroup(
-                        label="LR Adjustment",
-                        choices=["type1", "type2", "type3", "PEMS", "TST", "COS", "constant"],
-                        value=["TST", "type1", "COS", "type3"],
-                        info="Learning rate schedulers"
-                    )
-                    
-                    n_heads = gr.CheckboxGroup(
-                        label="Attention Heads",
-                        choices=["2", "4", "8", "16"],
-                        value=["2", "4", "8", "16"],
-                        info="Number of attention heads"
-                    )
-                    n_heads_custom = gr.Textbox(
-                        label="Custom Head Counts",
-                        placeholder="e.g., 1, 32",
-                        info="Add custom attention head counts"
-                    )
-                    
-                    d_ff = gr.CheckboxGroup(
-                        label="Feed-Forward Dimension",
-                        choices=["32", "64", "128", "256"],
-                        value=["32", "64", "128", "256"],
-                        info="FFN dimensions"
-                    )
-                    d_ff_custom = gr.Textbox(
-                        label="Custom FFN Dimensions",
-                        placeholder="e.g., 512, 1024",
-                        info="Add custom FFN dimensions"
-                    )
-                    stride = gr.CheckboxGroup(
-                        label="Stride",
-                        choices=["6", "7", "12", "20"],
-                        value=["7", "20"],
-                        info="Stride values"
-                    )
-                    stride_custom = gr.Textbox(
-                        label="Custom Strides",
-                        placeholder="e.g., 4, 14",
-                        info="Add custom stride values"
-                    )
-                    
-                    epochs = gr.CheckboxGroup(
-                        label="Epochs",
-                        choices=["10", "15", "20", "25", "30"],
-                        value=["20"],
-                        info="Training epochs"
-                    )
-                    epochs_custom = gr.Textbox(
-                        label="Custom Epochs",
-                        placeholder="e.g., 5, 50",
-                        info="Add custom epoch counts"
-                    )
-                                
-            gr.Markdown("### Integer Parameters (Range)")
+            run_backtest_btn.click(
+                fn=bt.run_backtest,
+                inputs=[bt_inference_path, bt_strategy, bt_initial_capital, bt_start_date, bt_end_date, bt_threshold],
+                outputs=backtest_output
+            )
+            
+            gr.Markdown("### Performance Metrics")
             with gr.Row():
                 with gr.Column():
-                    gr.Markdown("**LLM Layers**")
-                    llm_layers_low = gr.Number(label="Low", value=1)
-                    llm_layers_high = gr.Number(label="High", value=2)
-                
+                    bt_total_return = gr.Number(label="Total Return (%)", interactive=False)
+                    bt_sharpe_ratio = gr.Number(label="Sharpe Ratio", interactive=False)
+                    bt_max_drawdown = gr.Number(label="Max Drawdown (%)", interactive=False)
                 with gr.Column():
-                    gr.Markdown("**D Model**")
-                    d_model_low = gr.Number(label="Low", value=16)
-                    d_model_high = gr.Number(label="High", value=32)
-                    d_model_step = gr.Number(label="Step", value=16)
+                    bt_win_rate = gr.Number(label="Win Rate (%)", interactive=False)
+                    bt_num_trades = gr.Number(label="Number of Trades", interactive=False)
+                    bt_profit_factor = gr.Number(label="Profit Factor", interactive=False)
             
-            gr.Markdown("### Float Parameters (Range)")
-            with gr.Row():
-                with gr.Column():
-                    gr.Markdown("**Dropout**")
-                    dropout_low = gr.Number(label="Low", value=0.0)
-                    dropout_high = gr.Number(label="High", value=0.5)
-                    dropout_step = gr.Number(label="Step", value=0.1)
-                
-                with gr.Column():
-                    gr.Markdown("**PCT Start**")
-                    pct_start_low = gr.Number(label="Low", value=0.1)
-                    pct_start_high = gr.Number(label="High", value=0.5)
-                    pct_start_step = gr.Number(label="Step", value=0.1)
-                
-                with gr.Column():
-                    gr.Markdown("**Learning Rate**")
-                    lr_low = gr.Number(label="Low", value=1e-5)
-                    lr_high = gr.Number(label="High", value=1e-1)
-                    lr_log = gr.Checkbox(label="Log Scale", value=True)
-        
-        # Tab 3: Prompt Configuration
-        with gr.TabItem("Prompt"):
-            gr.Markdown("### Dataset Prompt")
-            gr.Markdown("This prompt describes the dataset and is used by the model for context.")
-            prompt = gr.Textbox(
-                label="Prompt",
-                value=DEFAULT_PROMPT,
-                lines=10,
-                info="Edit the prompt that describes your dataset"
-            )
-            prompt_filename = gr.Textbox(label="Prompt Filename", value="CRYPTEX.txt")
-            save_prompt_btn = gr.Button("Save Prompt", variant="secondary")
-            prompt_status = gr.Textbox(label="Status", interactive=False)
-            
-            save_prompt_btn.click(
-                fn=save_prompt,
-                inputs=[prompt, prompt_filename],
-                outputs=prompt_status
-            )
-        
-        # Tab 4: Generate & Run
-        with gr.TabItem("Generate & Run"):
-            gr.Markdown("### Generate Configuration and Command")
-            
-            with gr.Row():
-                generate_cmd_btn = gr.Button("Generate Command", variant="primary")
-                generate_yaml_btn = gr.Button("Generate YAML", variant="secondary")
-            
-            command_output = gr.Textbox(label="Generated Command", lines=3, interactive=True)
-            yaml_output = gr.Code(label="Generated YAML Configuration", language="yaml", lines=30)
-            
-            with gr.Row():
-                save_yaml_filename = gr.Textbox(label="YAML Filename", value="custom_config.yaml")
-                save_yaml_btn = gr.Button("Save YAML Config", variant="secondary")
-            yaml_save_status = gr.Textbox(label="Save Status", interactive=False)
-            
-            gr.Markdown("### Execute HPO")
-            run_btn = gr.Button("Run HPO", variant="primary")
-            run_output = gr.Textbox(label="Execution Output", lines=20, interactive=False)
-            
-            # Wire up the buttons
-            generate_cmd_btn.click(
-                fn=build_command,
-                inputs=[
-                    gpu, study_name, granularity, start_date, end_date,
-                    inf_start, inf_end, data_path, returns, backtest,
-                    experiment_name, trials, aggregate, no_inf_aggregate,
-                    log_all_metrics, yaml_file, volatility,
-                    features, seq_len, pred_len, num_tokens, loss, lradj,
-                    n_heads, d_ff, batch_size, patch_len, stride, epochs,
-                    llm_layers_low, llm_layers_high,
-                    d_model_low, d_model_high, d_model_step,
-                    dropout_low, dropout_high, dropout_step,
-                    pct_start_low, pct_start_high, pct_start_step,
-                    lr_low, lr_high, lr_log,
-                    prompt
-                ],
-                outputs=command_output
-            )
-            
-            generate_yaml_btn.click(
-                fn=generate_yaml_config,
-                inputs=[
-                    features, # no custom values
-                    seq_len, seq_len_custom,
-                    pred_len, pred_len_custom,
-                    num_tokens, num_tokens_custom,
-                    loss, # no custom values
-                    lradj, # no custom values
-                    n_heads, n_heads_custom,
-                    d_ff, d_ff_custom,
-                    batch_size, batch_size_custom,
-                    patch_len, patch_len_custom,
-                    stride, stride_custom,
-                    epochs, epochs_custom,
-                    llm_layers_low, llm_layers_high,
-                    d_model_low, d_model_high, d_model_step,
-                    dropout_low, dropout_high, dropout_step,
-                    pct_start_low, pct_start_high, pct_start_step,
-                    lr_low, lr_high, lr_log
-                ],
-                outputs=yaml_output
-            )
-            
-            save_yaml_btn.click(
-                fn=save_yaml_config,
-                inputs=[yaml_output, save_yaml_filename],
-                outputs=yaml_save_status
-            )
-            
-            run_btn.click(
-                fn=run_hpo,
-                inputs=command_output,
-                outputs=run_output
-            )
+            gr.Markdown("### Equity Curve")
+            bt_equity_plot = gr.Plot(label="Portfolio Value Over Time")
 
 
 if __name__ == "__main__":

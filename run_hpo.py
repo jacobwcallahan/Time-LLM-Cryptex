@@ -62,7 +62,7 @@ METRICS_DB_PATH = "/data-fast/nfs/mlflow/metrics.db" # Metrics database path
 DATASET_PATH = Path("/data-fast/nfs/dataset/") # Dataset path (without specific dataset)
 DATA_PATH = Path("temp/data.csv") # Data path in temp folder
 INF_PATH = Path("temp/inf_data.csv") # Inference path in temp folder
-INFERENCE = False # Bool to determine whether to run inference
+INFERENCE = True # Bool to determine whether to run inference
 
 def parse_args():
     parser = argparse.ArgumentParser()
@@ -528,6 +528,7 @@ def main(
     # --- 5. Create and Run the Optuna Study ---
     # The 'study_name' will group your runs. If you restart the script, it will resume.
     # 'storage' tells Optuna to save results to a local SQLite database.
+    args = parse_args()
 
     os.makedirs("temp", exist_ok=True)
     org_data_path = Path("temp/org_data.csv")
@@ -536,6 +537,8 @@ def main(
         OPTUNA_STORAGE_PATH = f"sqlite:////mnt/nfs/mlflow/optuna_study.db"
         DATASET_PATH = Path("/mnt/nfs/datasets/")
         METRICS_DB_PATH = f"/mnt/nfs/mlflow/metrics.db"
+
+    print(f"Inference start: {args.inf_start}, Inference end: {args.inf_end}")
 
     INFERENCE = args.inf_start is not None or args.inf_end is not None
         

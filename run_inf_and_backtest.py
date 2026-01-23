@@ -31,19 +31,18 @@ def parse_args():
     parser.add_argument('--experiment_name', type=str, required=True, help='Experiment Name')
     parser.add_argument('--granularity', type=str, required=False, default='daily', help='Granularity default is daily')
     parser.add_argument('--aggregate', type=int, required=False, default=1, help='Aggregate default is 1')
-    parser.add_argument('--start_date', type=str, required=False, default=None, help='Start Date default is None')
-    parser.add_argument('--end_date', type=str, required=False, default=None, help='End Date default is None')
+    parser.add_argument('--start_date', type=str, required=False, default=None, help='Start Date default is None. (format: YYYY-MM-DD)')
+    parser.add_argument('--end_date', type=str, required=False, default=None, help='End Date default is None. (format: YYYY-MM-DD)')
     parser.add_argument('--dataset_path', type=str, required=False, default='/mnt/nfs/datasets/', help='Dataset Path default is /mnt/nfs/datasets/')
     parser.add_argument('--save_path', type=str, required=False, default='temp', help='Save Path default is temp folder')
     return parser.parse_args()
 
-def run_inference_and_backtest(model_name, experiment_name, granularity, aggregate, start_date, end_date, dataset_path,custom_dataset_path, save_path, asset = None):
+def run_inference_and_backtest(model_name, experiment_name, granularity, aggregate, start_date, end_date, dataset_path, save_path, asset = None):
     client = mlflow.tracking.MlflowClient()
     inf_output_path = run_inference(model_id = model_name, 
                                     mlflow_client = client, 
                                     experiment_name = experiment_name, 
                                     dataset_path = dataset_path, 
-                                    custom_dataset_path = custom_dataset_path,
                                     granularity = granularity, 
                                     aggregate = aggregate, 
                                     start_date = start_date, 
@@ -80,13 +79,11 @@ def run_inference_and_backtest(model_name, experiment_name, granularity, aggrega
 if __name__ == "__main__":
     args = parse_args()
     run_inference_and_backtest(
-        args.model_name, 
-        args.experiment_name, 
-        args.granularity, 
-        args.aggregate, 
-        args.start_date, 
-        args.end_date, 
-        args.dataset_path, 
-        args.custom_dataset_path, 
-        args.save_path, 
-        args.asset)
+        model_name = args.model_name, 
+        experiment_name = args.experiment_name, 
+        granularity = args.granularity, 
+        aggregate = args.aggregate, 
+        start_date = args.start_date, 
+        end_date = args.end_date, 
+        dataset_path = args.dataset_path, 
+        save_path = args.save_path)

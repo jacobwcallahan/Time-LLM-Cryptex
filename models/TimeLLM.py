@@ -332,6 +332,14 @@ class Model(nn.Module):
         output = output.permute(0, 1, 3, 2).contiguous()  # [B, n_vars, d_ff, prompt_len + num_patches]
         output = self.output_projection(output[:, :, :, -self.patch_nums:])  # [B, n_vars, pred_len]
         output = output.permute(0, 2, 1).contiguous()  # [B, pred_len, n_vars]
+        
+        # Print log odds (raw output values before denormalization)
+        print(f"\n=== Log Odds (Raw Output) ===")
+        print(f"Shape: {output.shape}")
+        print(f"Values:\n{output.detach().cpu()}")
+        print(f"Min: {output.min().item():.6f}, Max: {output.max().item():.6f}, Mean: {output.mean().item():.6f}")
+        print(f"=============================\n")
+        
         # Denormalize output
         output = self.normalize_layers(output, 'denorm')  # [B, pred_len, n_vars]
         return output[:, -self.pred_len:, :]  # [B, pred_len, n_vars]

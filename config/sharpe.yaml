@@ -1,0 +1,39 @@
+categorical:
+  features: ["S", "M"]
+  seq_len: [28, 56, 84, 168]
+  pred_len: [7, 14]
+  num_tokens: [500, 1000]
+  loss: ["TRADING_RETURNS"]
+  lradj: ["TST","type1","COS", "type3"]
+  n_heads: [2, 4, 8, 16]
+  d_ff: [32, 64, 128, 256]
+  batch_size: [8,16]
+  patch_len: [7,14,21]
+  stride: [2, 7, 14]
+  epochs: [15] # Epochs must be more than 1
+
+int:
+  llm_layers:
+    low: 1
+    high: 2
+  d_model:
+    low: 16
+    high: 32
+    step: 16
+
+float:
+  dropout:
+    low: 0.0
+    high: 0.5
+    step: 0.1
+  pct_start:
+    low: 0.1
+    high: 0.5
+    step: 0.1
+  learning_rate:
+    low: 1e-5
+    high: 1e-1
+    log: true
+
+# log_float:
+# Cannot be used if there are no parameters in the section
