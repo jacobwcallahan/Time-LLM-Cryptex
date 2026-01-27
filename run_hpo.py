@@ -193,7 +193,7 @@ def set_optuna_vars(trial, data_path, yaml_file):
         params: Dictionary of trial parameters
     """
 
-    with open(Path("config") / args.yaml_file, "r") as f:
+    with open(Path("config") / ARGS["yaml_file"], "r") as f:
         config = yaml.safe_load(f)
 
     params = {}
@@ -252,17 +252,17 @@ def set_optuna_vars(trial, data_path, yaml_file):
             )
 
 
-    params["target"] = "returns" if args.returns else "close"
-    params['target'] = "volatility" if args.volatility else params["target"]
+    params["target"] = "returns" if ARGS["returns"] else "close"
+    params['target'] = "volatility" if ARGS["volatility"] else params["target"]
     params["metric"] = "SHARPE"
-    #params["dates"] = f"{args.start}_{args.end}"
-    params["experiment_name"] = args.experiment_name or llm_model
+    #params["dates"] = f"{ARGS["start"]}_{ARGS["end"]}"
+    params["experiment_name"] = ARGS["experiment_name"] or llm_model
 
-    #trial.set_user_attr("dates", f"{args.start}_{args.end}")
-    trial.set_user_attr("granularity", args.granularity)
-    trial.set_user_attr("aggregate", args.aggregate)
+    #trial.set_user_attr("dates", f"{ARGS["start"]}_{ARGS["end"]}")
+    trial.set_user_attr("granularity", ARGS["granularity"])
+    trial.set_user_attr("aggregate", ARGS["aggregate"])
     trial.set_user_attr("target", params["target"])
-    trial.set_user_attr("data_type", "returns" if args.returns else "ohlcv")
+    trial.set_user_attr("data_type", "returns" if ARGS["returns"] else "ohlcv")
     trial.set_user_attr("metric", "SHARPE")
     
     print("--------------------------------\n")
@@ -275,7 +275,7 @@ def set_optuna_vars(trial, data_path, yaml_file):
     return params
 
 
-def run_pipeline(run, mlflow_client, metrics_db_path, model_id, llm_model, args, trial_dict, experiment_name):
+def run_pipeline(run, mlflow_client, metrics_db_path, model_id, llm_model, ARGS, trial_dict, experiment_name):
     """
     Runs the pipeline for the model if the inference path is provided.
     It logs the MDA metric for the first candle, the parameters, and the summary table to the metrics database.
@@ -286,7 +286,7 @@ def run_pipeline(run, mlflow_client, metrics_db_path, model_id, llm_model, args,
         metrics_db_path: path to the metrics database
         model_id: model id
         llm_model: llm model
-        args: arguments
+        ARGS: arguments
         inf_path: path to the inference data
         trial_dict: dictionary of trial parameters
         experiment_name: experiment name
@@ -307,10 +307,10 @@ def run_pipeline(run, mlflow_client, metrics_db_path, model_id, llm_model, args,
             mlflow_client = mlflow_client,
             experiment_name = experiment_name,
             dataset_path = DATASET_PATH.parent, 
-            granularity = args.granularity, 
-            aggregate = args.aggregate, 
-            start_date = args.inf_start, 
-            end_date = args.inf_end, 
+            granularity = ARGS["granularity"], 
+            aggregate = ARGS["aggregate"], 
+            start_date = ARGS["inf_start"], 
+            end_date = ARGS["inf_end"], 
             save_path = inf_save_path)
 
     except Exception as e:
@@ -320,7 +320,7 @@ def run_pipeline(run, mlflow_client, metrics_db_path, model_id, llm_model, args,
 
     mda_vals = get_mda_vals(inf_output_path)
     
-    if args.returns:
+    if ARGS["returns"]:
         inf_output_path = Path("temp") / "inference_ret.csv"
     else:
         inf_output_path = Path("temp") / "inference.csv"
@@ -332,7 +332,7 @@ def run_pipeline(run, mlflow_client, metrics_db_path, model_id, llm_model, args,
     pd.DataFrame(list[tuple](mse_vals.items()), columns=['metric', 'value']).to_csv(Path("temp") / "mse_metrics.csv", index=False)
     pd.DataFrame(list[tuple](rmse_vals.items()), columns=['metric', 'value']).to_csv(Path("temp") / "rmse_metrics.csv", index=False)
 
-    if args.log_all_metrics:
+    if ARGS["log_all_metrics"]:
         mlflow.log_metrics(mda_vals, step = 1, run_id = run.info.run_id)
         mlflow.log_metrics(mse_vals, step = 1, run_id = run.info.run_id)
         mlflow.log_metrics(rmse_vals, step = 1, run_id = run.info.run_id)
@@ -374,7 +374,7 @@ def run_pipeline(run, mlflow_client, metrics_db_path, model_id, llm_model, args,
 
 
     # Performs the backtest if the backtest flag is set
-    if args.backtest:   
+    if ARGS["backtest"]:   
         try:
             perform_backtest(inf_output_path) # Performs backtest
         except Exception as e:
@@ -416,7 +416,7 @@ def objective(trial):
     """
 
     # Sets the optuna variables
-    trial_dict = set_optuna_vars(trial, args.data_path, args)
+    trial_dict = set_optuna_vars(trial, ARGS["data_path"], ARGS)
 
     # Saves the original data to the DATA_PATH and INF_PATH
     # This is done to avoid using data from previous trials
@@ -429,7 +429,7 @@ def objective(trial):
 
 
     # Checks if the returns flag is set
-    if args.returns:
+    if ARGS["returns"]:
         train_path = convert_to_returns(DATA_PATH)
 
         if INFERENCE:
@@ -441,7 +441,7 @@ def objective(trial):
     # --- Dynamic/Conditional Parameters ---
     # Generate a unique model_id for each trial
     trial_id = str(uuid.uuid4())[:8]
-    model_id = f"trial_{trial_id}_{args.granularity}_{args.data_path if args.data_path is not None else 'full'}_dates_{args.start}_{args.end}_features_{trial_dict['features']}_seq_{trial_dict['seq_len']}"
+    model_id = f"trial_{trial_id}_{ARGS["granularity"]}_{ARGS["data_path"] if ARGS["data_path"] is not None else 'full'}_dates_{ARGS["start"]}_{ARGS["end"]}_features_{trial_dict['features']}_seq_{trial_dict['seq_len']}"
 
     # Set the experiment name
     experiment_name = trial_dict['experiment_name']
@@ -456,7 +456,7 @@ def objective(trial):
     # We'll use the model_id (which includes trial_id) as a unique tag.
     
     try:
-        if args.backtest and not INFERENCE:
+        if ARGS["backtest"] and not INFERENCE:
             warnings.warn("Backtest flag is set but no inference date is provided. - Will not perform backtest.")
 
         # Creates the command to train the model
@@ -470,10 +470,10 @@ def objective(trial):
 
         run = _find_mlflow_run(client, experiment_name, model_id)
 
-        client.log_param(run_id = run.info.run_id, key = "granularity", value = args.granularity)
-        client.log_param(run_id = run.info.run_id, key = "start date", value = args.start)
-        client.log_param(run_id = run.info.run_id, key = "end date", value = args.end)
-        client.log_param(run_id = run.info.run_id, key = "aggregate", value = args.aggregate)
+        client.log_param(run_id = run.info.run_id, key = "granularity", value = ARGS["granularity"])
+        client.log_param(run_id = run.info.run_id, key = "start date", value = ARGS["start"])
+        client.log_param(run_id = run.info.run_id, key = "end date", value = ARGS["end"])
+        client.log_param(run_id = run.info.run_id, key = "aggregate", value = ARGS["aggregate"])
         
         
         if not run:
@@ -494,7 +494,7 @@ def objective(trial):
         
         # This section checks to run inference if the inference path is provided
         # As well checks if the returns flag is set and converts the data back to candlesticks
-        run_pipeline(run, client, METRICS_DB_PATH, model_id, llm_model, args, trial_dict, experiment_name)
+        run_pipeline(run, client, METRICS_DB_PATH, model_id, llm_model, ARGS, trial_dict, experiment_name)
 
         # Checks if the validation metric is 0
         if final_metric == 0:
@@ -544,73 +544,75 @@ def main(
     # --- 5. Create and Run the Optuna Study ---
     # The 'study_name' will group your runs. If you restart the script, it will resume.
     # 'storage' tells Optuna to save results to a local SQLite database.
-    args = parse_args()
+
+    ARGS.update(locals()) # Updates the ARGS dictionary with the local variables 
+    #! WARNING: This is a hack to get the local variables into the ARGS dictionary. It is not a good practice and should be avoided.
 
     os.makedirs("temp", exist_ok=True)
     org_data_path = Path("temp/org_data.csv")
 
-    if args.gpu != '1': # If the GPU is not 1, uses the NFS server for the storage path
+    if ARGS["gpu"] != '1': # If the GPU is not 1, uses the NFS server for the storage path
         OPTUNA_STORAGE_PATH = f"sqlite:////mnt/nfs/mlflow/optuna_study.db"
         DATASET_PATH = Path("/mnt/nfs/datasets/")
         METRICS_DB_PATH = f"/mnt/nfs/mlflow/metrics.db"
 
-    print(f"Inference start: {args.inf_start}, Inference end: {args.inf_end}")
+    print(f"Inference start: {ARGS["inf_start"]}, Inference end: {ARGS["inf_end"]}")
 
-    INFERENCE = args.inf_start is not None or args.inf_end is not None
+    INFERENCE = ARGS["inf_start"] is not None or ARGS["inf_end"] is not None
     
     # Sets the dataset path based on the granularity argument
-    if args.granularity.lower() in ['daily', 'd']:
+    if ARGS["granularity"].lower() in ['daily', 'd']:
         DATASET_PATH = DATASET_PATH / "candlesticks-D.csv"
-    elif args.granularity.lower() in ['hourly', 'h']:
+    elif ARGS["granularity"].lower() in ['hourly', 'h']:
         DATASET_PATH = DATASET_PATH / "candlesticks-h.csv"
-    elif args.granularity.lower() in ['weekly', 'w']:
+    elif ARGS["granularity"].lower() in ['weekly', 'w']:
         DATASET_PATH = DATASET_PATH / "candlesticks-W.csv"
-    elif args.granularity.lower() in ['minute', 'min']:
+    elif ARGS["granularity"].lower() in ['minute', 'min']:
         DATASET_PATH = DATASET_PATH / "candlesticks-Min.csv"
 
-    if args.data_path is None and args.start is None:
+    if ARGS["data_path"] is None and ARGS["start"] is None:
         warnings.warn("""Data path and start date are not provided - Will start from the beginning of the dataset. 
         If no end date is provided, it will use the entire dataset.
         If inference is enabled, it will use the entire dataset for inference.""")
 
     print(f"Prepping Data...")
 
-    if args.data_path is not None: # If the data path is provided, uses the data path
-        full_data = pd.read_csv(args.data_path)
-        inf_data = pd.read_csv(args.data_path)
+    if ARGS["data_path"] is not None: # If the data path is provided, uses the data path
+        full_data = pd.read_csv(ARGS["data_path"])
+        inf_data = pd.read_csv(ARGS["data_path"])
     else:
         full_data = pd.read_csv(DATASET_PATH)
         inf_data = full_data.copy()
 
-    if args.start: # If the start date is provided, uses the start date
-        full_data = full_data[full_data['timestamp'] >= datetime.strptime(args.start, '%Y-%m-%d').timestamp()]
+    if ARGS["start"]: # If the start date is provided, uses the start date
+        full_data = full_data[full_data['timestamp'] >= datetime.strptime(ARGS["start"], '%Y-%m-%d').timestamp()]
 
-    if args.end: # If the end date is provided, uses the end date
-        full_data = full_data[full_data['timestamp'] <= datetime.strptime(args.end, '%Y-%m-%d').timestamp()]
+    if ARGS["end"]: # If the end date is provided, uses the end date
+        full_data = full_data[full_data['timestamp'] <= datetime.strptime(ARGS["end"], '%Y-%m-%d').timestamp()]
 
-    if args.aggregate: # If the aggregate period is provided, aggregates the data
-        full_data = aggregate_data(full_data, args.aggregate)
+    if ARGS["aggregate"]: # If the aggregate period is provided, aggregates the data
+        full_data = aggregate_data(full_data, ARGS["aggregate"])
 
     full_data.to_csv(org_data_path, index=False)
     
     # If inference is enabled, we need to filter the inference data based on the inference start and end dates
     if INFERENCE:
-        if args.inf_start:
-            inf_data = inf_data[inf_data['timestamp'] >= datetime.strptime(args.inf_start, '%Y-%m-%d').timestamp()]
+        if ARGS["inf_start"]:
+            inf_data = inf_data[inf_data['timestamp'] >= datetime.strptime(ARGS["inf_start"], '%Y-%m-%d').timestamp()]
 
-        if args.inf_end:
-            inf_data = inf_data[inf_data['timestamp'] <= datetime.strptime(args.inf_end, '%Y-%m-%d').timestamp()]
+        if ARGS["inf_end"]:
+            inf_data = inf_data[inf_data['timestamp'] <= datetime.strptime(ARGS["inf_end"], '%Y-%m-%d').timestamp()]
             
-        if args.aggregate and not args.no_inf_aggregate:
-            inf_data = aggregate_data(inf_data, args.aggregate)
+        if ARGS["aggregate"] and not ARGS["no_inf_aggregate"]:
+            inf_data = aggregate_data(inf_data, ARGS["aggregate"])
 
         inf_data.to_csv(Path('temp') / "org_inf_data.csv", index=False)
 
 
-    if args.study_name == '': # Uses the default study name
+    if ARGS["study_name"] == '': # Uses the default study name
         study_name = f"{llm_model.lower()}_study"
     else: # Uses the given study name
-        study_name = f"{args.study_name}"
+        study_name = f"{ARGS["study_name"]}"
 
     study = optuna.create_study(
         study_name=study_name,
@@ -621,7 +623,7 @@ def main(
     
     # 'n_trials' is the total number of experiments you want to run.
     # Optuna will intelligently choose the parameters for these runs.
-    study.optimize(objective, n_trials=args.trials)
+    study.optimize(objective, n_trials=ARGS["trials"])
 
     # --- 6. Print the Results ---
     print("\n--- Hyperparameter Optimization Finished ---")
@@ -642,6 +644,20 @@ def main(
 
 if __name__ == "__main__":
     args = parse_args()
-    ARGS.update(args.__dict__)
-
-    
+    main(gpu = args.gpu,
+         study_name = args.study_name, 
+         granularity = args.granularity, 
+         start = args.start, 
+         end = args.end, 
+         inf_start = args.inf_start, 
+         inf_end = args.inf_end, 
+         data_path = args.data_path, 
+         returns = args.returns, 
+         backtest = args.backtest, 
+         experiment_name = args.experiment_name, 
+         trials = args.trials, 
+         aggregate = args.aggregate, 
+         no_inf_aggregate = args.no_inf_aggregate, 
+         log_all_metrics = args.log_all_metrics, 
+         yaml_file = args.yaml_file, 
+         volatility = args.volatility)
