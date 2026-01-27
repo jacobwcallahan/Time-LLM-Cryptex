@@ -63,6 +63,24 @@ DATASET_PATH = Path("/data-fast/nfs/dataset/") # Dataset path (without specific 
 DATA_PATH = Path("temp/data.csv") # Data path in temp folder
 INF_PATH = Path("temp/inf_data.csv") # Inference path in temp folder
 INFERENCE = True # Bool to determine whether to run inference
+ARGS = {"gpu": 1, 
+        "study_name": '', 
+        "granularity": 'daily', 
+        "start": None, 
+        "end": None, 
+        "inf_start": None, 
+        "inf_end": None, 
+        "data_path": None, 
+        "returns": False, 
+        "backtest": False, 
+        "experiment_name": None, 
+        "trials": 10, 
+        "aggregate": 1, 
+        "no_inf_aggregate": False, 
+        "log_all_metrics": False, 
+        "yaml_file": 'optuna_vars.yaml', 
+        "volatility": False}
+
 
 def parse_args():
     parser = argparse.ArgumentParser()
@@ -539,7 +557,7 @@ def main(
     print(f"Inference start: {args.inf_start}, Inference end: {args.inf_end}")
 
     INFERENCE = args.inf_start is not None or args.inf_end is not None
-        
+    
     # Sets the dataset path based on the granularity argument
     if args.granularity.lower() in ['daily', 'd']:
         DATASET_PATH = DATASET_PATH / "candlesticks-D.csv"
@@ -577,7 +595,6 @@ def main(
     
     # If inference is enabled, we need to filter the inference data based on the inference start and end dates
     if INFERENCE:
-
         if args.inf_start:
             inf_data = inf_data[inf_data['timestamp'] >= datetime.strptime(args.inf_start, '%Y-%m-%d').timestamp()]
 
@@ -625,6 +642,6 @@ def main(
 
 if __name__ == "__main__":
     args = parse_args()
-    main(args.gpu, args.study_name, args.granularity, args.start, args.end, args.inf_start, args.inf_end, args.data_path, args.returns, args.backtest, args.experiment_name, args.trials, args.aggregate, args.no_inf_aggregate, args.log_all_metrics, args.yaml_file, args.volatility)
+    ARGS.update(args.__dict__)
 
     
