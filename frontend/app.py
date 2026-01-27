@@ -9,7 +9,10 @@ from pathlib import Path
 import subprocess
 import os
 from datetime import datetime
+import sys
 from helper_fcns import check_inf_after_train, start_before_end, end_after_start
+
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(".."))))
 import backtesting.backtest as bt
 
 # Default prompt from CRYPTEX.txt
@@ -687,11 +690,21 @@ with gr.Blocks(title="Time-LLM-Cryptex", theme=gr.themes.Citrus()) as app:
             run_backtest_btn = gr.Button("Run Backtest", variant="primary")
             backtest_output = gr.Textbox(label="Backtest Output", lines=10, interactive=False)
 
+            def run_backtest(inference_path, strategy, initial_capital, start_date, end_date, threshold):
+                return bt.main({
+                    'data': inference_path,
+                    'strategy': strategy,
+                    'initial_capital': initial_capital,
+                    'start_date': start_date,
+                    'end_date': end_date,
+                    'threshold': threshold
+                })
+
             run_backtest_btn.click(
-                fn=bt.run_backtest,
+                fn=run_backtest,
                 inputs=[bt_inference_path, bt_strategy, bt_initial_capital, bt_start_date, bt_end_date, bt_threshold],
                 outputs=backtest_output
-            )
+            )   
             
             gr.Markdown("### Performance Metrics")
             with gr.Row():

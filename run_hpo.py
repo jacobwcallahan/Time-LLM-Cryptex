@@ -336,8 +336,6 @@ def run_pipeline(run, mlflow_client, metrics_db_path, model_id, llm_model, args,
         min_rmse = {"Min Inf RMSE": round((min_mse) ** 0.5, 6)}
         mlflow.log_metrics(min_rmse, step = 1, run_id = run.info.run_id)
 
-
-
     try:    
         # Saves the MDA metrics to the MLflow as an artifact then removes the file
         mda_path = Path("temp") / "mda_metrics.csv"
@@ -355,7 +353,7 @@ def run_pipeline(run, mlflow_client, metrics_db_path, model_id, llm_model, args,
     
     except Exception as e:
         print(f"\nMDA metrics save failed: {e}\n")
-    
+
 
     # Performs the backtest if the backtest flag is set
     if args.backtest:   
@@ -553,7 +551,9 @@ def main(
         DATASET_PATH = DATASET_PATH / "candlesticks-Min.csv"
 
     if args.data_path is None and args.start is None:
-        warnings.warn("Data path and start date are not provided - Will start from the beginning of the dataset. If no end date is provided, it will use the entire dataset.")
+        warnings.warn("""Data path and start date are not provided - Will start from the beginning of the dataset. 
+        If no end date is provided, it will use the entire dataset.
+        If inference is enabled, it will use the entire dataset for inference.""")
 
     print(f"Prepping Data...")
 
@@ -622,8 +622,6 @@ def main(
 
     if os.path.exists("temp"):
         shutil.rmtree("temp")
-
-
 
 if __name__ == "__main__":
     args = parse_args()

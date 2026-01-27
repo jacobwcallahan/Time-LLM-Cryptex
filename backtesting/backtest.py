@@ -603,29 +603,26 @@ def parse_args():
     parser.add_argument('--step_days', type=int, default=30, help='Step days for walk-forward')
     parser.add_argument('--pipeline', action='store_true', help='Used to determine if the backtest is from the pipeline. Do not use this flag if you are not running the backtest from the pipeline.')
     
-    
+    return parser.parse_args()
 
 def main(args_dict):
-    args = parse_args()
-
-    
     runner = BacktestRunner(args_dict['data'], cash=args_dict['cash'], commission=args_dict['commission'], pipeline=args_dict['pipeline'])
     
-    if args.optimize:
+    if args_dict['optimize']:
         # Optimize specific strategy
-        runner.optimize_strategy(args.optimize)
+        runner.optimize_strategy(args_dict['optimize'])
 
-    elif args.strategy:
+    elif args_dict['strategy']:
         # Run specific strategy
-        runner.run_strategy(args.strategy)
+        runner.run_strategy(args_dict['strategy'])
         runner.create_summary_table()
     
-    elif args.walk_forward:
+    elif args_dict['walk_forward']:
         # Walk-forward optimization
-        runner.walk_forward_optimization(args.walk_forward, 
-                                   train_days=args.train_days,
-                                   test_days=args.test_days, 
-                                   step_days=args.step_days)
+        runner.walk_forward_optimization(args_dict['walk_forward'], 
+                                   train_days=args_dict['train_days'],
+                                   test_days=args_dict['test_days'], 
+                                   step_days=args_dict['step_days'])
 
     else:
         # Run all strategies
@@ -641,7 +638,8 @@ def main(args_dict):
 if __name__ == "__main__":
     args_dict = {}
     args = parse_args()
-    for arg in args:
+    
+    for arg in args.__dict__:
         args_dict[arg] = getattr(args, arg)
 
     main(args_dict)
