@@ -7,6 +7,7 @@ Functions:
     perform_backtest: Performs the backtest on the inference data.
     get_mda_vals: Gets the MDA values for the inference data.
     get_mse_vals: Gets the MSE values for the inference data.
+    get_mae_vals: Gets the MAE values for the inference data.
     create_metrics_json: Creates the metrics JSON for the MLflow run.
     metrics_to_db: Saves the metrics to the database.
     aggregate_data: Aggregates the data to the specified granularity.
@@ -39,7 +40,11 @@ def run_inference(model_id,
 
     """
     Runs the inference pipeline for the model.
-    
+
+    This function converts the data to returns if the target is returns and converts the data back to candlesticks if the target is OHLCV.
+    It also saves the inference data to the save_path.
+
+    returns the path to the OHLCV inference data
     Args:
         model_id: MLflow model id
         mlflow_client: mlflow client
@@ -52,7 +57,7 @@ def run_inference(model_id,
         save_path: path to save the inference data (default: temp folder)
     
     Returns:
-        path to the inference data
+        path to the OHLCV inference data
     """
 
     os.makedirs("temp", exist_ok=True)
@@ -89,12 +94,10 @@ def run_inference(model_id,
     
     if start_date:
         start_date = datetime.strptime(start_date, '%Y-%m-%d').timestamp()
-        
         inf_data = inf_data[inf_data['timestamp'] >= start_date]
 
     if end_date:
         end_date = datetime.strptime(end_date, '%Y-%m-%d').timestamp()
-        
         inf_data = inf_data[inf_data['timestamp'] <= end_date]
         
     if aggregate > 1:
@@ -115,7 +118,6 @@ def run_inference(model_id,
     run = runs[0]
 
     if run.data.params['target'] == 'returns':
-
         convert_to_returns(Path(inf_save_path) / "inference.csv")
     
 
@@ -134,15 +136,20 @@ def run_inference(model_id,
         raise ValueError(f"Error running inference: \n{e}")
 
     inf_data = pd.read_csv(inf_path)
-
-    inf_data.to_csv(Path("temp") / "inference_ret.csv", index=False)
-
+    ohlcv_path = inf_path
     if run.data.params['target'] == 'returns':
-        convert_back_to_candlesticks(original_data_path = org_inf_path, # Original Candlestick Data Path
-                                        inferenced_data_path = inf_path, 
-                                        num_predictions = int(run.data.params['pred_len']))
+        inf_data_ret = Path("temp") / "inference_ret.csv"
+        inf_data.to_csv(inf_data_ret, index=False)
+        ohlcv_path = convert_back_to_candlesticks(original_data_path = org_inf_path, # Original Candlestick Data Path
+                                        inferenced_data_path = inf_data_ret, 
+                                        num_predictions = int(run.data.params['pred_len']),
+                                        custom_save_path = Path("temp") / "inference_ohlcv.csv")
+
+        print(f"OHLCV data saved to: {ohlcv_path}")
+
+        mlflow.log_artifact(ohlcv_path, run_id = run.info.run_id)
     
-    return inf_path  
+    return ohlcv_path
     
 
 def perform_backtest(inf_output_path, optimize=False, save_path = "temp"):
@@ -166,14 +173,16 @@ def perform_backtest(inf_output_path, optimize=False, save_path = "temp"):
     subprocess.run(cmd, shell=True)
 
 
-def get_mda_vals(inf_path, target = 'close'):
+def get_mda_vals(inf_path):
     """
     Perform analysis on the inference data.
+    It can only be used on the OHLCV data.
 
     args:
         client: mlflow client
         new_data_path: path to the new data
     """
+    target = 'close'
 
     data = pd.read_csv(inf_path)
     pred_len = data.columns.str.contains('predicted').sum()
@@ -224,6 +233,10 @@ def get_mda_vals(inf_path, target = 'close'):
         mda = np.mean(valid_comparisons)
         mda_vals[f'inf_pred_{pred}_mda'] = mda
 
+    if len(mda_vals) == 0:
+        print(inf_path)
+        raise ValueError("No valid MDA values found.")
+    
     return mda_vals
 
 def get_mse_vals(inf_path, pred_len, target = 'close'):
@@ -259,6 +272,35 @@ def get_mse_vals(inf_path, pred_len, target = 'close'):
         raise ValueError(f"Error getting MSE values: {e}")
 
     return mse_vals
+
+def get_mae_vals(inf_path, pred_len, target = 'close'):
+    """
+    Get the MAE values for the inference data.
+    """
+    data = pd.read_csv(inf_path)
+    pred_len = data.columns.str.contains('predicted').sum()
+    mae_vals = {}
+    print(data.columns)
+    try:
+        errors = {f'pred_{pred}': [] for pred in range(1, pred_len+1)}
+        for i in range(len(data) - pred_len):
+            row = data.iloc[i]
+            if pd.isna(row[f'{target}_predicted_1']):
+                continue
+            for pred in range(1, pred_len+1):
+                next_row = data.iloc[i+pred]
+                if pd.notna(row[f'{target}_predicted_{pred}']):
+                    error = row[f'{target}_predicted_{pred}'] - next_row[target]
+                    abs_error = abs(error)
+                    errors[f'pred_{pred}'].append(abs_error)
+
+        for pred in range(1, pred_len+1):
+            mae_vals[f'inf_pred_{pred}_mae'] = np.mean(errors[f'pred_{pred}'])
+    except Exception as e:
+        print(f"Error getting MAE values: {e}")
+        raise ValueError(f"Error getting MAE values: {e}")
+
+    return mae_vals
 
 def create_metrics_json(mlflow_run_id, llm_model, experiment_name, summary_table, mda_vals, trial_dict):
     """
@@ -418,9 +460,9 @@ def convert_to_returns(data_path, keep_high_low=False, keep_volume=True, log_ret
 
     return data_path
 
-def convert_back_to_candlesticks(original_data_path, inferenced_data_path, num_predictions: int):
+def convert_back_to_candlesticks(original_data_path, inferenced_data_path, num_predictions: int, custom_save_path = None):
     """
-    Convert returns data back to candlesticks. This is used to backtest the model.
+    Convert inferenced returns data back to candlesticks. This is used to backtest the model.
     Writes the inferenced data to the inferenced data path.
 
     args:
@@ -455,9 +497,12 @@ def convert_back_to_candlesticks(original_data_path, inferenced_data_path, num_p
     # Convert unix timestamp to UTC datetime
     result["timestamp"] = pd.to_datetime(result["timestamp"], unit='s', utc=True)
 
-    result.to_csv(inferenced_data_path, index=False)
-    print(f"Predicted returns saved to {inferenced_data_path}")
+    if custom_save_path is None:
+        result.to_csv(inferenced_data_path, index=False)
+    else:
+        result.to_csv(custom_save_path, index=False)
+    print(f"Predicted candlesticks saved to {custom_save_path if custom_save_path is not None else inferenced_data_path}")
 
-    return inferenced_data_path
+    return custom_save_path if custom_save_path is not None else inferenced_data_path
     
 

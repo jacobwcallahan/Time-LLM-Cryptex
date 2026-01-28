@@ -27,6 +27,8 @@ Arguments:
     --yaml_file: YAML file to use for the study. Default is optuna_vars.yaml. Contained in ./config/
 """
 
+from logging import warning
+from turtle import end_fill
 from typing import Any
 import optuna
 import pandas as pd
@@ -38,9 +40,11 @@ import time
 import os
 import argparse
 from datetime import datetime
+from dateutil.parser import parse
+
 import yaml
 from pathlib import Path
-from utils.pipeline import run_inference, perform_backtest, convert_to_returns, metrics_to_db, create_metrics_json, aggregate_data, get_mse_vals, get_mda_vals
+from utils.pipeline import run_inference, perform_backtest, convert_to_returns, metrics_to_db, create_metrics_json, aggregate_data, get_mse_vals, get_mda_vals, get_mae_vals
 import warnings
 import sqlite3
 import shutil
@@ -58,7 +62,7 @@ os.environ["MLFLOW_S3_ENDPOINT_URL"] = f"http://{MLFLOW_SERVER_IP}:9000"
 llm_model = "LLAMA3.1"
 OPTUNA_STORAGE_PATH = "sqlite:////data-fast/nfs/mlflow/optuna_study.db" # Optuna storage path
 METRICS_DB_PATH = "/data-fast/nfs/mlflow/metrics.db" # Metrics database path
-DATASET_PATH = Path("/data-fast/nfs/datasets/") # Dataset path for gpu1 (without specific dataset)
+DATASET_PATH = Path("./dataset/candles/") # Dataset path for gpu1 (without specific dataset)
 DATA_PATH = Path("temp/data.csv") # Data path in temp folder
 INF_PATH = Path("temp/inf_data.csv") # Inference path in temp folder
 INFERENCE = True # Bool to determine whether to run inference
@@ -100,7 +104,7 @@ def parse_args():
     parser.add_argument('--no_inf_aggregate', action='store_true', help='By default, aggregates inference data. Set this flag to disable aggregation.')
     parser.add_argument('--log_all_metrics', action='store_true', help='By default, logs only the best metric to MLflow. Set this flag to log all metrics (still logs as artifacts).')
     parser.add_argument('--yaml_file', type=str, default='optuna_vars.yaml', help='YAML file to use for the study. Default is optuna_vars.yaml. Contained in ./config/')
-    parser.add_argument('--model_id_name', type=str, default=None, help='Name to use for the model id. Defualt is set by a series of parameters.')
+    parser.add_argument('--model_id_name', type=str, default=None, help='Name to use for the model id, trail number is added to the end. Default is set by a series of parameters.')
     parser.add_argument('--volatility', action='store_true', help='If True, uses the volatility target.')
     return parser.parse_args()
   
@@ -291,9 +295,12 @@ def run_pipeline(run, mlflow_client, metrics_db_path, model_id, llm_model, ARGS,
         trial_dict: dictionary of trial parameters
         experiment_name: experiment name
     """
-
+    
+    
     inf_save_path = Path("temp")   # Folder name for the inference data
     inf_output_path = Path("temp") / "inference.csv"      # Path to the inference data
+    ohlcv_path = Path("temp") / "inference.csv"    # Path to the OHLCV inference data
+
 
 
     # Checks to run inference if the inference path is provided
@@ -302,7 +309,7 @@ def run_pipeline(run, mlflow_client, metrics_db_path, model_id, llm_model, ARGS,
         return
 
     try:
-        inf_output_path = run_inference(
+        ohlcv_path = run_inference(
             model_id = model_id, 
             mlflow_client = mlflow_client,
             experiment_name = experiment_name,
@@ -316,20 +323,22 @@ def run_pipeline(run, mlflow_client, metrics_db_path, model_id, llm_model, ARGS,
     except Exception as e:
         print(f"\nInference failed - Stopping Pipeline: {e}\n")
         return
-
-    mda_vals = get_mda_vals(inf_output_path)
     
-    if ARGS["returns"]:
-        inf_output_path = Path("temp") / "inference_ret.csv"
-    else:
-        inf_output_path = Path("temp") / "inference.csv"
+    # MDA vals must use the OHLCV data
+    mda_vals = get_mda_vals(ohlcv_path)
 
+    # MSE vals can use the returns data or the OHLCV data
     mse_vals = get_mse_vals(inf_output_path, pred_len = trial_dict['pred_len'], target = trial_dict['target'])
+
     rmse_vals = {f"RMSE_{key.split('_')[2]}": round((value) ** 0.5, 6) for key, value in mse_vals.items()}
+
+    # MAE vals can use the returns data or the OHLCV data
+    mae_vals = get_mae_vals(inf_output_path, pred_len = trial_dict['pred_len'], target = trial_dict['target'])
 
     # Turns the metrics into dataframes and saves them to the temp folder so they can be logged to the MLflow run as artifacts.
     pd.DataFrame(list[tuple](mse_vals.items()), columns=['metric', 'value']).to_csv(Path("temp") / "mse_metrics.csv", index=False)
     pd.DataFrame(list[tuple](rmse_vals.items()), columns=['metric', 'value']).to_csv(Path("temp") / "rmse_metrics.csv", index=False)
+    pd.DataFrame(list[tuple](mae_vals.items()), columns=['metric', 'value']).to_csv(Path("temp") / "mae_metrics.csv", index=False)
 
     if ARGS["log_all_metrics"]:
         mlflow.log_metrics(mda_vals, step = 1, run_id = run.info.run_id)
@@ -337,6 +346,8 @@ def run_pipeline(run, mlflow_client, metrics_db_path, model_id, llm_model, ARGS,
         mlflow.log_metrics(rmse_vals, step = 1, run_id = run.info.run_id)
     else:
         max_mda = max(mda_vals.values())
+        
+        # Logs the corresponding candle for the best MDA metric
         for key, value in mda_vals.items():
             if value == max_mda:
                 mlflow.log_metric(key = f"Best Inf MDA", value = value, step = 1, run_id = run.info.run_id)
@@ -366,6 +377,10 @@ def run_pipeline(run, mlflow_client, metrics_db_path, model_id, llm_model, ARGS,
         rmse_path = Path("temp") / "rmse_metrics.csv"
         pd.DataFrame(list[tuple](rmse_vals.items()), columns=['metric', 'value']).to_csv(rmse_path, index=False)
         mlflow.log_artifact(rmse_path, run_id = run.info.run_id)
+
+        mae_path = Path("temp") / "mae_metrics.csv"
+        pd.DataFrame(list[tuple](mae_vals.items()), columns=['metric', 'value']).to_csv(mae_path, index=False)
+        mlflow.log_artifact(mae_path, run_id = run.info.run_id)
     
     except Exception as e:
         print(f"\nMDA metrics save failed: {e}\n")
@@ -373,11 +388,15 @@ def run_pipeline(run, mlflow_client, metrics_db_path, model_id, llm_model, ARGS,
     # Performs the backtest if the backtest flag is set
     if ARGS["backtest"]:   
         try:
-            perform_backtest(inf_output_path) # Performs backtest
+            perform_backtest(ohlcv_path) # Performs backtest
         except Exception as e:
             print(f"\nBacktest failed: \n\n{e}\n")  
         
-        summary_table = pd.read_csv(Path("temp") / "summary_table.csv")
+        try:
+            summary_table = pd.read_csv(Path("temp") / "summary_table.csv")
+        except Exception as e:
+            print(f"\nSummary table save failed: {e}\n")
+            return
 
         # creates the metrics json
         metrics_json = create_metrics_json(run.info.run_id,llm_model, experiment_name, summary_table, mda_vals, trial_dict)
@@ -437,7 +456,11 @@ def objective(trial):
     # --- Dynamic/Conditional Parameters ---
     # Generate a unique model_id for each trial
     trial_id = str(uuid.uuid4())[:8]
-    model_id = f"trial_{trial_id}_{ARGS['granularity']}_{ARGS['data_path'] if ARGS['data_path'] is not None else 'full'}_dates_{ARGS['start']}_{ARGS['end']}_features_{trial_dict['features']}_seq_{trial_dict['seq_len']}"
+    if ARGS["model_id_name"] is not None and ARGS["model_id_name"] != "None":
+        print(f"Using provided model id name: {ARGS['model_id_name']}")
+        model_id = ARGS["model_id_name"] + f"_trial_{trial_id}"
+    else:
+        model_id = f"trial_{trial_id}_{ARGS['granularity']}_{ARGS['data_path'] if ARGS['data_path'] is not None else 'full'}_dates_{ARGS['start']}_{ARGS['end']}_features_{trial_dict['features']}_seq_{trial_dict['seq_len']}"
 
     # Set the experiment name
     experiment_name = trial_dict['experiment_name']
@@ -470,7 +493,6 @@ def objective(trial):
         client.log_param(run_id = run.info.run_id, key = "start date", value = ARGS["start"])
         client.log_param(run_id = run.info.run_id, key = "end date", value = ARGS["end"])
         client.log_param(run_id = run.info.run_id, key = "aggregate", value = ARGS["aggregate"])
-        
         
         if not run:
             raise optuna.exceptions.TrialPruned("Could not find MLflow run post-execution.")
@@ -542,24 +564,25 @@ def main(
     # The 'study_name' will group your runs. If you restart the script, it will resume.
     # 'storage' tells Optuna to save results to a local SQLite database.
 
-    global DATASET_PATH, OPTUNA_STORAGE_PATH, METRICS_DB_PATH, INFERENCE, ARGS, llm_model
-
     ARGS.update(locals()) # Updates the ARGS dictionary with the local variables 
     #! WARNING: This is a hack to get the local variables into the ARGS dictionary. It is not a good practice and should be avoided.
+
+
+    global DATASET_PATH, OPTUNA_STORAGE_PATH, METRICS_DB_PATH, INFERENCE, llm_model
+
 
     os.makedirs("temp", exist_ok=True)
     org_data_path = Path("temp") / "org_data.csv"
 
     if ARGS["gpu"] != '1': # If the GPU is not 1, uses the NFS server for the storage path
         OPTUNA_STORAGE_PATH = f"sqlite:////mnt/nfs/mlflow/optuna_study.db"
-        DATASET_PATH = Path("/mnt/nfs/datasets/")
+        #** DATASET_PATH = Path("/mnt/nfs/datasets/")
+        #** ignored while the /mnt nfs is not mounted
         METRICS_DB_PATH = f"/mnt/nfs/mlflow/metrics.db"
 
     print(f"Inference start: {ARGS['inf_start']}, Inference end: {ARGS['inf_end']}")
 
     INFERENCE = ARGS['inf_start'] is not None or ARGS['inf_end'] is not None
-
-    print(f"Dataset path: {DATASET_PATH}")
     
     # Sets the dataset path based on the granularity argument
     if ARGS["granularity"].lower() in ['daily', 'd']:
@@ -571,6 +594,9 @@ def main(
     elif ARGS["granularity"].lower() in ['minute', 'min']:
         DATASET_PATH = DATASET_PATH / "candlesticks-Min.csv"
 
+    print(f"Dataset path: {DATASET_PATH}")
+
+
     if ARGS["data_path"] is None and ARGS["start"] is None:
         warnings.warn("""Data path and start date are not provided - Will start from the beginning of the dataset. 
         If no end date is provided, it will use the entire dataset.
@@ -578,7 +604,8 @@ def main(
 
     print(f"Prepping Data...")
 
-    if ARGS["data_path"] is not None: # If the data path is provided, uses the data path
+    if ARGS["data_path"] is not None and ARGS["data_path"] != "None": # If the data path is provided, uses the data path
+        print(type(ARGS['data_path']))
         print(f"Using provided dataset: {ARGS['data_path']}")
         full_data = pd.read_csv(ARGS["data_path"])
         inf_data = pd.read_csv(ARGS["data_path"])
@@ -590,46 +617,58 @@ def main(
         except Exception as e:
             raise ValueError(f"Error reading the dataset: \n{e}")
 
-    first_date = full_data.iloc[0]['timestamp']
-    last_date = full_data.iloc[-1]['timestamp']
+    first_time = datetime.fromtimestamp(int(full_data.iloc[0]['timestamp'])).timestamp()
+    last_time = datetime.fromtimestamp(int(full_data.iloc[-1]['timestamp'])).timestamp()
 
+    # Checks formatting and validity of start date
+    if ARGS["start"]:
+        try:
+            start = datetime.strptime(ARGS["start"], '%Y-%m-%d').timestamp()
+            print(start)
+            print(type(start))
+        except:
+            warnings.warn(f"Incorrect Format for start date. Start time is now first date of dataset: {datetime.fromtimestamp(first_time).date()}")
+            start = first_time
+        if start < first_time:
+            warnings.warn(f"Start date is before the first date of the dataset. Using the first date of the dataset: {datetime.fromtimestamp(first_time).date()}")
+            start = first_time
+        elif start > last_time:
+            raise ValueError(f"Start date is after the last date of the dataset. The start date {ARGS['start']} is after the last date {datetime.fromtimestamp(last_time).date()}.")
+    else:
+        warnings.warn(f"No start date provided. Using the first date of the dataset: {datetime.fromtimestamp(first_time).date()}")
+        start = first_time
+
+    # Checks formatting and validity of end date
+    if ARGS["end"]:
+        try:
+            end = datetime.strptime(ARGS["end"], '%Y-%m-%d').timestamp()
+        except:
+            warnings.warn(f"Incorrect Format for end date. End time is now first date of dataset: {datetime.fromtimestamp(first_time).date()}")
+            end = last_time
+        if end < last_time:
+            warnings.warn(f"End date is before the end date of the dataset. Using the last date of the dataset: {datetime.fromtimestamp(last_time).date()}")
+            end = last_time
+        elif end < first_time:
+            raise ValueError(f"End date is before the first date of the dataset. The end date {ARGS['end']} is before the first date {datetime.fromtimestamp(last_time).date()}.")
+    else:
+        warnings.warn(f"No end date provided. Using the last date of the dataset: {datetime.fromtimestamp(last_time).date()}")
+        end = last_time
+
+    full_data = full_data[(full_data['timestamp'] >= start) & (full_data['timestamp'] <= end)]
+    
     # Checks if the start and end dates are provided and if the start date is after the end date
     if ARGS["start"] is not None and ARGS["end"] is not None:
-        if datetime.strptime(ARGS["start"], '%Y-%m-%d').timestamp() > datetime.strptime(ARGS["end"], '%Y-%m-%d').timestamp():
-            warnings.warn(f"The start date given ({ARGS['start']}) is after the end date given ({ARGS['end']}). Using the last date of the dataset: {last_date} as the end date.")
-            ARGS["end"] = datetime.strptime(last_date, '%Y-%m-%d').timestamp()
-
-    if ARGS["start"]: # If the start date is provided, uses the start date and filters the data to the start date
-        if datetime.strptime(ARGS["start"], '%Y-%m-%d').timestamp() < first_date:
-            warnings.warn(f"Start date is before the first date of the dataset. Using the first date of the dataset: {first_date}")
-            ARGS["start"] = datetime.strptime(first_date, '%Y-%m-%d').timestamp()
-        elif datetime.strptime(ARGS["start"], '%Y-%m-%d').timestamp() > last_date:
-            raise ValueError(f"Start date is after the last date of the dataset. The start date {ARGS['start']} is after the last date {last_date}.")
-        else:
-            full_data = full_data[full_data['timestamp'] >= datetime.strptime(ARGS["start"], '%Y-%m-%d').timestamp()]
-    else:
-        warnings.warn(f"No start date provided. Using the first date of the dataset: {first_date}")
-        ARGS["start"] = datetime.strptime(first_date, '%Y-%m-%d').timestamp()
-
-    if ARGS["end"]: # If the end date is provided, uses the end date and filters the data to the end date
-        if datetime.strptime(ARGS["end"], '%Y-%m-%d').timestamp() > last_date:
-            warnings.warn(f"End date is after the last date of the dataset. Using the last date of the dataset: {last_date}")
-            ARGS["end"] = datetime.strptime(last_date, '%Y-%m-%d').timestamp()
-        elif datetime.strptime(ARGS["end"], '%Y-%m-%d').timestamp() < first_date:
-            raise ValueError(f"The end date given ({ARGS['end']}) is before the first date of the dataset ({first_date}). Please provide a end date that is before the {last_date}.")
-        else:
-            full_data = full_data[full_data['timestamp'] <= datetime.strptime(ARGS["end"], '%Y-%m-%d').timestamp()]
-    else:
-        warnings.warn(f"No end date provided. Using the last date of the dataset: {last_date}")
-        ARGS["end"] = datetime.strptime(last_date, '%Y-%m-%d').timestamp()
-
+        if start > end:
+            warnings.warn(f"The start date given ({ARGS['end']}) is after the end date given ({datetime.fromtimestamp(end).date()}). Using the last date of the dataset: {datetime.fromtimestamp(last_time).date()} as the end date.")
+            end = last_time
 
     if ARGS["aggregate"]: # If the aggregate period is provided, aggregates the data
         full_data = aggregate_data(full_data, ARGS["aggregate"])
-
+    
     full_data.to_csv(org_data_path, index=False)
 
     print("Training data is Prepped... Prepping Inference data...")
+
     
     # If inference is enabled, we need to filter the inference data based on the inference start and end dates
     if INFERENCE:
@@ -687,19 +726,19 @@ if __name__ == "__main__":
     args = parse_args()
     main(gpu = args.gpu,
          study_name = args.study_name, 
-         granularity = args.granularity, 
-         start = args.start, 
-         end = args.end, 
-         inf_start = args.inf_start, 
-         inf_end = args.inf_end, 
-         data_path = args.data_path, 
+         granularity = str(args.granularity) if args.granularity is not None else None,
+         start = str(args.start) if args.start is not None else None,
+         end = str(args.end) if args.end is not None else None,
+         inf_start = str(args.inf_start) if args.inf_start is not None else None,
+         inf_end = str(args.inf_end) if args.inf_end is not None else None,
+         data_path = str(args.data_path) if args.data_path is not None else None,
          returns = args.returns, 
          backtest = args.backtest, 
-         experiment_name = args.experiment_name, 
-         trials = args.trials, 
-         aggregate = args.aggregate, 
+         experiment_name = str(args.experiment_name) if args.experiment_name is not None else None,
+         trials = int(args.trials), 
+         aggregate = int(args.aggregate), 
          no_inf_aggregate = args.no_inf_aggregate, 
          log_all_metrics = args.log_all_metrics, 
-         yaml_file = args.yaml_file, 
-         model_id_name = args.model_id_name,
+         yaml_file = str(args.yaml_file) if args.yaml_file is not None else None,
+         model_id_name = str(args.model_id_name) if args.model_id_name is not None else None,
          volatility = args.volatility)

@@ -3,7 +3,7 @@ categorical:
   seq_len: [8]
   pred_len: [4] # 1 Hour and 6 Hours
   num_tokens: [100]
-  loss: ["SHARPE"]
+  loss: ["MSE"]
   lradj: ["TST","type1","COS"]
   n_heads: [2]
   d_ff: [32]
