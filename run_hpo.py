@@ -610,13 +610,13 @@ def main(
             print(start)
             print(type(start))
         except:
-            warnings.warn(f"Incorrect Format for start date. Start time is now first date of dataset: {datetime.fromtimestamp(first_time).date()}")
+            warnings.warn(f"Incorrect Format for start date. Start time is now first date of dataset: {datetime.fromtimestamp(first_time).date()}\n")
             start = first_time
         if start < first_time:
-            warnings.warn(f"Start date is before the first date of the dataset. Using the first date of the dataset: {datetime.fromtimestamp(first_time).date()}")
+            warnings.warn(f"Start date is before the first date of the dataset. Using the first date of the dataset: {datetime.fromtimestamp(first_time).date()}\n")
             start = first_time
         elif start > last_time:
-            raise ValueError(f"Start date is after the last date of the dataset. The start date {ARGS['start']} is after the last date {datetime.fromtimestamp(last_time).date()}.")
+            raise ValueError(f"Start date is after the last date of the dataset. The start date {ARGS['start']} is after the last date {datetime.fromtimestamp(last_time).date()}.\n")
     else:
         warnings.warn(f"No start date provided. Using the first date of the dataset: {datetime.fromtimestamp(first_time).date()}")
         start = first_time
@@ -626,15 +626,15 @@ def main(
         try:
             end = datetime.strptime(ARGS["end"], '%Y-%m-%d').timestamp()
         except:
-            warnings.warn(f"Incorrect Format for end date. End time is now first date of dataset: {datetime.fromtimestamp(first_time).date()}")
+            warnings.warn(f"Incorrect Format for end date. End time is now first date of dataset: {datetime.fromtimestamp(first_time).date()}\n")
             end = last_time
         if end < last_time:
-            warnings.warn(f"End date is before the end date of the dataset. Using the last date of the dataset: {datetime.fromtimestamp(last_time).date()}")
+            warnings.warn(f"End date is before the end date of the dataset. Using the last date of the dataset: {datetime.fromtimestamp(last_time).date()}\n")
             end = last_time
         elif end < first_time:
-            raise ValueError(f"End date is before the first date of the dataset. The end date {ARGS['end']} is before the first date {datetime.fromtimestamp(last_time).date()}.")
+            raise ValueError(f"End date is before the first date of the dataset. The end date {ARGS['end']} is before the first date {datetime.fromtimestamp(last_time).date()}.\n")
     else:
-        warnings.warn(f"No end date provided. Using the last date of the dataset: {datetime.fromtimestamp(last_time).date()}")
+        warnings.warn(f"No end date provided. Using the last date of the dataset: {datetime.fromtimestamp(last_time).date()}\n")
         end = last_time
 
     full_data = full_data[(full_data['timestamp'] >= start) & (full_data['timestamp'] <= end)]
@@ -642,7 +642,7 @@ def main(
     # Checks if the start and end dates are provided and if the start date is after the end date
     if ARGS["start"] is not None and ARGS["end"] is not None:
         if start > end:
-            warnings.warn(f"The start date given ({ARGS['end']}) is after the end date given ({datetime.fromtimestamp(end).date()}). Using the last date of the dataset: {datetime.fromtimestamp(last_time).date()} as the end date.")
+            warnings.warn(f"The start date given ({ARGS['end']}) is after the end date given ({datetime.fromtimestamp(end).date()}). Using the last date of the dataset: {datetime.fromtimestamp(last_time).date()} as the end date.\n")
             end = last_time
 
     if ARGS["aggregate"]: # If the aggregate period is provided, aggregates the data
@@ -654,17 +654,31 @@ def main(
 
     
     # If inference is enabled, we need to filter the inference data based on the inference start and end dates
+    inf_start = None
+    inf_end = None
     if INFERENCE:
         if ARGS["inf_start"]:
-            inf_data = inf_data[inf_data['timestamp'] >= datetime.strptime(ARGS["inf_start"], '%Y-%m-%d').timestamp()]
+            inf_start = datetime.strptime(ARGS["inf_start"], '%Y-%m-%d').timestamp()
+            if inf_start < end and inf_start > start:
+                warnings.warn(f"Inference start is after the end date. Moving the end date to the inference start: {datetime.fromtimestamp(end).date()}\n")
+                end = inf_start
+            
+
+            inf_data = inf_data[inf_data['timestamp'] >= inf_start]
 
         if ARGS["inf_end"]:
-            inf_data = inf_data[inf_data['timestamp'] <= datetime.strptime(ARGS["inf_end"], '%Y-%m-%d').timestamp()]
-            
-        if ARGS["aggregate"] and not ARGS["no_inf_aggregate"]:
-            inf_data = aggregate_data(inf_data, ARGS["aggregate"])
+            inf_end = datetime.strptime(ARGS["inf_end"], '%Y-%m-%d').timestamp()
+            if inf_end > last_time:
+                warnings.warn(f"Inference end is after the last date of the dataset. Using the last date of the dataset: {datetime.fromtimestamp(last_time).date()}\n")
+                inf_end = last_time
 
-        inf_data.to_csv(Path('temp') / "org_inf_data.csv", index=False)
+            inf_data = inf_data[inf_data['timestamp'] <= inf_end]
+        
+        inf_data.to_csv(Path("temp") / "org_inf_data.csv", index=False)
+    
+    full_data = full_data[(full_data['timestamp'] >= start) & (full_data['timestamp'] <= end)]
+    full_data.to_csv(org_data_path, index=False)
+
 
     print("Inference data is Prepped... Starting HPO...")
 
