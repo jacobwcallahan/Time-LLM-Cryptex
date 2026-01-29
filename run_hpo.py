@@ -44,7 +44,7 @@ from dateutil.parser import parse
 
 import yaml
 from pathlib import Path
-from utils.pipeline import run_inference, perform_backtest, convert_to_returns, metrics_to_db, create_metrics_json, aggregate_data, get_mse_vals, get_mda_vals, get_mae_vals
+from utils.pipeline import run_inference, perform_backtest, convert_to_returns, aggregate_data, get_mse_vals, get_mda_vals, get_mae_vals
 import warnings
 import sqlite3
 import shutil
@@ -61,7 +61,6 @@ os.environ["MLFLOW_S3_ENDPOINT_URL"] = f"http://{MLFLOW_SERVER_IP}:9000"
 
 llm_model = "LLAMA3.1"
 OPTUNA_STORAGE_PATH = "sqlite:////data-fast/nfs/mlflow/optuna_study.db" # Optuna storage path
-METRICS_DB_PATH = "/data-fast/nfs/mlflow/metrics.db" # Metrics database path
 DATASET_PATH = Path("./dataset/candles/") # Dataset path for gpu1 (without specific dataset)
 DATA_PATH = Path("temp/data.csv") # Data path in temp folder
 INF_PATH = Path("temp/inf_data.csv") # Inference path in temp folder
@@ -279,7 +278,7 @@ def set_optuna_vars(trial, data_path, yaml_file):
     return params
 
 
-def run_pipeline(run, mlflow_client, metrics_db_path, model_id, llm_model, ARGS, trial_dict, experiment_name):
+def run_pipeline(run, mlflow_client, model_id, llm_model, ARGS, trial_dict, experiment_name):
     """
     Runs the pipeline for the model if the inference path is provided.
     It logs the MDA metric for the first candle, the parameters, and the summary table to the metrics database.
@@ -287,7 +286,7 @@ def run_pipeline(run, mlflow_client, metrics_db_path, model_id, llm_model, ARGS,
 
     Args:   
         run: MLflow run object
-        metrics_db_path: path to the metrics database
+        mlflow_client: mlflow client
         model_id: model id
         llm_model: llm model
         ARGS: arguments
@@ -296,12 +295,9 @@ def run_pipeline(run, mlflow_client, metrics_db_path, model_id, llm_model, ARGS,
         experiment_name: experiment name
     """
     
-    
     inf_save_path = Path("temp")   # Folder name for the inference data
     inf_output_path = Path("temp") / "inference.csv"      # Path to the inference data
     ohlcv_path = Path("temp") / "inference.csv"    # Path to the OHLCV inference data
-
-
 
     # Checks to run inference if the inference path is provided
     # As well checks if the returns flag is set and converts the data back to candlesticks
@@ -398,16 +394,6 @@ def run_pipeline(run, mlflow_client, metrics_db_path, model_id, llm_model, ARGS,
             print(f"\nSummary table save failed: {e}\n")
             return
 
-        # creates the metrics json
-        metrics_json = create_metrics_json(run.info.run_id,llm_model, experiment_name, summary_table, mda_vals, trial_dict)
-        # saves the metrics to the database
-        try:
-            metrics_to_db(metrics_db_path, model_id, metrics_json)
-        except sqlite3.Error as e:
-            print(f"\nSQLite error: \n\n{e}\n")
-        except Exception as e:
-            print(f"\nMetrics to database failed: \n\n{e}\n")
-
         # Logs the summary table to the MLflow run
         mlflow.log_artifact(Path("temp") / "summary_table.csv", run_id = run.info.run_id)
 
@@ -421,7 +407,6 @@ def objective(trial):
     The function returns the metric we want to optimize (e.g., validation loss).
 
     It also runs the pipeline for the model if the inference path is provided.
-    It logs the MDA metric for the first candle, the parameters, and the summary table to the metrics database.
     Also logs the summary table to the MLflow run.
 
     Args:
@@ -512,7 +497,7 @@ def objective(trial):
         
         # This section checks to run inference if the inference path is provided
         # As well checks if the returns flag is set and converts the data back to candlesticks
-        run_pipeline(run, client, METRICS_DB_PATH, model_id, llm_model, ARGS, trial_dict, experiment_name)
+        run_pipeline(run, client, model_id, llm_model, ARGS, trial_dict, experiment_name)
 
         # Checks if the validation metric is 0
         if final_metric == 0:
@@ -567,8 +552,7 @@ def main(
     ARGS.update(locals()) # Updates the ARGS dictionary with the local variables 
     #! WARNING: This is a hack to get the local variables into the ARGS dictionary. It is not a good practice and should be avoided.
 
-
-    global DATASET_PATH, OPTUNA_STORAGE_PATH, METRICS_DB_PATH, INFERENCE, llm_model
+    global DATASET_PATH, OPTUNA_STORAGE_PATH, INFERENCE, llm_model
 
 
     os.makedirs("temp", exist_ok=True)
@@ -578,7 +562,6 @@ def main(
         OPTUNA_STORAGE_PATH = f"sqlite:////mnt/nfs/mlflow/optuna_study.db"
         #** DATASET_PATH = Path("/mnt/nfs/datasets/")
         #** ignored while the /mnt nfs is not mounted
-        METRICS_DB_PATH = f"/mnt/nfs/mlflow/metrics.db"
 
     print(f"Inference start: {ARGS['inf_start']}, Inference end: {ARGS['inf_end']}")
 
@@ -724,6 +707,9 @@ def main(
 
 if __name__ == "__main__":
     args = parse_args()
+
+    # Loads the arguments into the main function
+    # Ensures values are set to None and not 'None'
     main(gpu = args.gpu,
          study_name = args.study_name, 
          granularity = str(args.granularity) if args.granularity is not None else None,
