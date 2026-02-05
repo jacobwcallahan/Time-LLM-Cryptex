@@ -1,1 +1,9 @@
 .env
+*.png
+*.csv
+*.pyc
+*.txt
+*.tex
+*.Identifier
+*.zip
+*.md

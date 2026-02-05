@@ -3,13 +3,29 @@ import backtrader as bt
 import numpy as np
 import pandas as pd
 import tqdm
+import os
 
 from utils import load_and_prepare_data
 from strategies import (
     SimpleAIStrategy, SLTPStrategy, MomentumAIStrategy,
     RSIAIStrategy, BollingerAIStrategy, MeanReversionAIStrategy,
-    TrendFollowingAIStrategy
+    TrendFollowingAIStrategy, BuyHoldStrategy
 )
+
+def direction_mda_horizon(df: pd.DataFrame, pred_col: str, horizon: int) -> float:
+    close = df["close"].astype(float)
+    pred = df[pred_col].astype(float)
+    future_close = close.shift(-int(horizon))
+    actual_move = future_close - close
+    pred_move = pred - close
+    tmp = pd.concat([actual_move, pred_move], axis=1, join="inner").dropna()
+    if tmp.empty:
+        return float("nan")
+    tmp = tmp[(tmp.iloc[:, 0] != 0) & (tmp.iloc[:, 1] != 0)]
+    if tmp.empty:
+        return float("nan")
+    return float((np.sign(tmp.iloc[:, 0]) == np.sign(tmp.iloc[:, 1])).mean())
+
 
 # Strategy configurations
 STRATEGIES = {
@@ -24,9 +40,9 @@ STRATEGIES = {
         'class': SLTPStrategy,
         'params': {
             'prediction_horizon': 1,
-            'confidence_threshold': 0.01,
-            'stop_loss_pct': 0.05,
-            'take_profit_pct': 0.15,
+            'confidence_threshold': 0.1,
+            'stop_loss_pct': 0.02,
+            'take_profit_pct': 0.07,
         }
     },
     'MomentumAI': {
@@ -73,6 +89,12 @@ STRATEGIES = {
             'ema_short': 5,
             'ema_long': 20,
         }
+    },
+    'BuyHold': {
+        'class': BuyHoldStrategy,
+        'params': {
+            'position_size': 0.99,
+        }
     }
 }
 
@@ -80,41 +102,41 @@ STRATEGIES = {
 
 OPTIMIZATION_RANGES = {
     'SimpleAI': {
-        'prediction_horizon': range(1, 4),  # 1, 2, 3
+        'prediction_horizon': [1],
         'confidence_threshold': np.arange(0.005, 0.03, 0.005),  # 0.005 to 0.025
     },
     'SLTP': {
-        'prediction_horizon': range(1, 4),  # 1, 2, 3
+        'prediction_horizon': [1],
         'confidence_threshold': np.arange(0.005, 0.02, 0.005),  # 0.005 to 0.015
         'stop_loss_pct': np.arange(0.03, 0.08, 0.02),           # 0.03 to 0.07
         'take_profit_pct': np.arange(0.10, 0.25, 0.05),         # 0.10 to 0.20
     },
     'MomentumAI': {
-        'prediction_horizon': range(1, 4),
+        'prediction_horizon': [1],
         'confidence_threshold': np.arange(0.01, 0.025, 0.005),  # 0.01 to 0.02
         'momentum_window': range(10, 40, 10),                   # 10, 20, 30
     },
     'RSIAI': {
-        'prediction_horizon': range(1, 4),
+        'prediction_horizon': [1],
         'confidence_threshold': np.arange(0.005, 0.02, 0.005),
         'rsi_period': [14, 21],
         'rsi_oversold': range(20, 40, 10),                      # 20, 30
         'rsi_overbought': range(70, 90, 10),                    # 70, 80
     },
     'BollingerAI': {
-        'prediction_horizon': range(1, 4),
+        'prediction_horizon': [1],
         'confidence_threshold': np.arange(0.005, 0.02, 0.005),
         'bb_period': range(15, 30, 5),                          # 15, 20, 25
         'bb_std': [1.5, 2.0, 2.5],
     },
     'MeanReversionAI': {
-        'prediction_horizon': range(1, 4),
+        'prediction_horizon': [1],
         'confidence_threshold': np.arange(0.005, 0.02, 0.005),
         'lookback_period': range(15, 30, 5),                    # 15, 20, 25
         'mean_reversion_threshold': np.arange(1.0, 2.5, 0.5),   # 1.0, 1.5, 2.0
     },
     'TrendFollowingAI': {
-        'prediction_horizon': range(1, 4),
+        'prediction_horizon': [1],
         'confidence_threshold': np.arange(0.005, 0.02, 0.005),
         'ema_short': [5, 10],
         'ema_long': [20, 30],
@@ -124,10 +146,11 @@ OPTIMIZATION_RANGES = {
 class BacktestRunner:
     """Main backtesting runner using backtrader"""
     
-    def __init__(self, data_path, cash=100000, commission=0.001):
+    def __init__(self, data_path, cash=100000, commission=0.001, train_data_path=None):
         self.data_path = data_path
         self.cash = cash
         self.commission = commission
+        self.train_data_path = train_data_path
         self.data = None
         self.data_feed_class = None
         self.results = {}
@@ -135,8 +158,13 @@ class BacktestRunner:
     
     def load_data(self):
         """Load and prepare data"""
-        self.data, self.data_feed_class = load_and_prepare_data(self.data_path)
-        print(f"Data loaded with shape: {self.data.shape} from {self.data.index.min()} to {self.data.index.max()}\n")
+        self.data, self.data_feed_class = load_and_prepare_data(
+            self.data_path,
+            train_data_path=self.train_data_path,
+        )
+        cutoff = self.data.attrs.get('train_cutoff_timestamp')
+        cutoff_str = f" | train_cutoff: {cutoff}" if cutoff is not None else ""
+        print(f"Data loaded with shape: {self.data.shape} from {self.data.index.min()} to {self.data.index.max()}{cutoff_str}\n")
     
     def run_strategy(self, strategy_name):
         """Run a single strategy"""
@@ -184,16 +212,52 @@ class BacktestRunner:
         # Store results
         final_value = cerebro.broker.getvalue()
         total_return = (final_value - self.cash) / self.cash * 100
+
+        mda_value = self.compute_mda(params)
+        mse_value = self.compute_mse(params)
         
         self.results[strategy_name] = {
             'cerebro': cerebro,
             'params': params,
             'final_value': final_value,
             'total_return': total_return,
-            'analyzers': analyzer_results
+            'analyzers': analyzer_results,
+            'mda': mda_value,
+            'rmse': mse_value,
         }
         
         return cerebro, analyzer_results
+
+    def compute_mda(self, params):
+        """Compute horizon MDA using sign(close_{t+h}-close_t) vs sign(pred-close_t)."""
+        horizon = params.get('prediction_horizon', 1)
+        try:
+            horizon = int(horizon)
+        except (TypeError, ValueError):
+            horizon = 1
+        pred_col = f'close_predicted_{horizon}'
+        if pred_col not in self.data.columns:
+            return float('nan')
+        return direction_mda_horizon(self.data, pred_col, horizon)
+    
+    def compute_mse(self, params):
+        """Deprecated. Use compute_rmse."""
+        return self.compute_rmse(params)
+
+    def compute_rmse(self, params):
+        """Compute RMSE between actual close and the selected prediction horizon."""
+        horizon = params.get('prediction_horizon', 1)
+        try:
+            horizon = int(horizon)
+        except (TypeError, ValueError):
+            horizon = 1
+        pred_col = f'close_predicted_{horizon}'
+        if pred_col not in self.data.columns:
+            return float('nan')
+        actual = self.data['close'].astype(float)
+        predicted = self.data[pred_col].astype(float)
+        diff = actual - predicted
+        return float(np.sqrt((diff ** 2).mean()))
     
     def optimize_strategy(self, strategy_name):
         """Optimize a strategy using grid search"""
@@ -298,6 +362,8 @@ class BacktestRunner:
             total_trades = trades_info.get('total', {}).get('total', 0)
             won_trades = trades_info.get('won', {}).get('total', 0)
             win_rate = (won_trades / total_trades * 100) if total_trades > 0 else 0
+            mda = result.get('mda', float('nan'))
+            rmse = result.get('rmse', float('nan'))
             
             summary_data.append({
                 'Strategy': name,
@@ -306,18 +372,22 @@ class BacktestRunner:
                 'Max Drawdown (%)': max_dd_pct,
                 'Total Trades': total_trades,
                 'Win Rate (%)': win_rate,
+                'RMSE': rmse,
+                'MDA (%)': mda * 100 if pd.notna(mda) else np.nan,
                 'Initial Value ($)': self.cash,
                 'Final Value ($)': result['final_value']
             })
         
         df = pd.DataFrame(summary_data)
-        df = df.sort_values('Sharpe Ratio', ascending=False).reset_index(drop=True)
+        df = df.sort_values('Total Return (%)', ascending=False).reset_index(drop=True)
         
         print("[Results]")
         print(df.to_string(index=False, float_format='%.2f'))
 
         # Show plot for best strategy or single strategy
         strategy_to_plot = df.iloc[0]['Strategy']
+        if strategy_to_plot == 'BuyHold' and len(df) > 1:
+            strategy_to_plot = df.iloc[1]['Strategy']
         cerebro = self.results[strategy_to_plot]['cerebro']
 
         print(f"\n[Plot] Showing {strategy_to_plot}")
@@ -531,6 +601,12 @@ def main():
     parser.add_argument('--data', required=True, help='Path to CSV file with AI predictions')
     parser.add_argument('--strategy', help='Specific strategy to run (default: all)')
     parser.add_argument('--optimize', help='Strategy to optimize')
+    parser.add_argument('--prediction_horizon', type=int, default=1,
+                        help="Which close_predicted_<h> column to use for AI strategies (default: 1).")
+    parser.add_argument('--train_data', type=str, default=None,
+                        help='Training CSV used to cut off backtest to unseen timestamps (max timestamp).')
+    parser.add_argument('--disable_train_cutoff', action='store_true',
+                        help='Disable cutting backtest window using training max timestamp.')
     parser.add_argument('--cash', type=float, default=1000, help='Initial cash')
     parser.add_argument('--commission', type=float, default=0.001, help='Commission rate')
     parser.add_argument('--walk_forward', help='Strategy for walk-forward optimization')
@@ -540,8 +616,57 @@ def main():
 
     
     args = parser.parse_args()
+
+    # Apply prediction_horizon to all AI strategies (not BuyHold) so the backtester
+    # selects the correct close_predicted_<h> column.
+    if args.prediction_horizon is not None:
+        horizon = int(args.prediction_horizon)
+        for strategy_name, spec in STRATEGIES.items():
+            if strategy_name == 'BuyHold':
+                continue
+            spec.get('params', {})['prediction_horizon'] = horizon
+        for strategy_name, ranges in OPTIMIZATION_RANGES.items():
+            if 'prediction_horizon' in ranges:
+                ranges['prediction_horizon'] = [horizon]
+
+    def _parse_ts_for_auto(ts: pd.Series) -> pd.Series:
+        if pd.api.types.is_numeric_dtype(ts):
+            vals = pd.to_numeric(ts, errors='coerce')
+            maxv = vals.dropna().max()
+            unit = 's'
+            if pd.notna(maxv):
+                if maxv > 1e14:
+                    unit = 'ns'
+                elif maxv > 1e11:
+                    unit = 'ms'
+            return pd.to_datetime(vals, unit=unit, errors='coerce')
+        return pd.to_datetime(ts, errors='coerce')
+
+    def _auto_train_data_path(inference_csv_path: str) -> str | None:
+        repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+        daily = os.path.join(repo_root, 'dataset', 'cryptex', 'daily', 'candlesticks-D.csv')
+        hourly = os.path.join(repo_root, 'dataset', 'cryptex', 'hourly', 'candlesticks-h-clean.csv')
+
+        try:
+            ts = pd.read_csv(inference_csv_path, usecols=['timestamp'], nrows=200)['timestamp']
+            ts = _parse_ts_for_auto(ts).dropna().sort_values()
+            if len(ts) < 3:
+                return daily if os.path.exists(daily) else None
+            deltas = ts.diff().dropna().dt.total_seconds()
+            median_s = float(deltas.median()) if not deltas.empty else 86400.0
+            if median_s <= 7200 and os.path.exists(hourly):
+                return hourly
+            if os.path.exists(daily):
+                return daily
+            return hourly if os.path.exists(hourly) else None
+        except Exception:
+            return daily if os.path.exists(daily) else None
+
+    train_data_path = None
+    if not args.disable_train_cutoff:
+        train_data_path = args.train_data or _auto_train_data_path(args.data)
     
-    runner = BacktestRunner(args.data, cash=args.cash, commission=args.commission)
+    runner = BacktestRunner(args.data, cash=args.cash, commission=args.commission, train_data_path=train_data_path)
     
     if args.optimize:
         # Optimize specific strategy

@@ -15,6 +15,8 @@ def get_loss_function(loss_name):
         return MADLLoss()
     elif loss_name == 'GMADL':
         return GMADLLoss()
+    elif loss_name == 'TRADING':
+        return TradingLoss()
     else:
         raise ValueError(f"Unsupported loss type: {loss_name}")
 
@@ -159,3 +161,108 @@ class GMADLLoss(nn.Module):
 
         # Mean over all elements
         return loss.mean()
+
+class TradingLoss(nn.Module):
+    """
+    Trading-oriented loss function combining MSE with risk-adjusted directional penalty.
+    Penalizes wrong trading decisions proportionally to risk-adjusted loss magnitude.
+    
+    Formula: loss = alpha * MSE(pred, true) + beta * risk_adj_penalty * sharpe_weight
+    
+    Args:
+        alpha: Weight for MSE component (default: 1.0)
+        beta: Weight for directional penalty component (default: 1.0)
+        eps: Small epsilon to avoid division by zero (default: 1e-8)
+    """
+    def __init__(self, alpha=1.0, beta=1.0, eps=1e-8):
+        super().__init__()
+        self.alpha = alpha
+        self.beta = beta
+        self.eps = eps
+
+    def forward(self, pred: torch.Tensor, true: torch.Tensor, input_data: torch.Tensor = None) -> torch.Tensor:
+        """
+        Compute trading loss with risk-adjusted returns.
+        
+        Args:
+            pred: [batch, pred_len] or [batch, pred_len, feature_dim] - predicted values
+            true: [batch, pred_len] or [batch, pred_len, feature_dim] - true values
+            input_data: [batch, seq_len] or [batch, seq_len, feature_dim] - input sequence (optional)
+                        Used to compute trading returns from entry price. If None, falls back to MSE-only for pred_len=1.
+            
+        Returns:
+            Scalar loss tensor
+        """
+        # Ensure same shape
+        if pred.shape != true.shape:
+            raise ValueError(f"Shape mismatch: pred {pred.shape}, true {true.shape}")
+
+        # MSE component - standard regression loss to narrow down predictions
+        mse_loss = torch.mean((pred - true) ** 2)
+
+        # If input_data is not provided, use fallback logic
+        if input_data is None:
+            # For pred_len=1, can't compute trading returns without input, return MSE-only
+            if pred.shape[1] == 1:
+                return self.alpha * mse_loss
+            
+            # For pred_len>1, use returns-based logic as fallback (smooth directional penalty)
+            if pred.dim() == 2:
+                pred_returns = pred[:, 1:] - pred[:, :-1]
+                true_returns = true[:, 1:] - true[:, :-1]
+            else:
+                pred_returns = pred[:, 1:, :] - pred[:, :-1, :]
+                true_returns = true[:, 1:, :] - true[:, :-1, :]
+            
+            smooth_wrong = torch.relu(-pred_returns * true_returns)
+            return_error = torch.abs(pred_returns - true_returns)
+            directional_penalty = (smooth_wrong * return_error).mean()
+            
+            true_returns_flat = true_returns.flatten()
+            mean_return = true_returns_flat.mean()
+            std_return = torch.clamp(true_returns_flat.std() + self.eps, min=1e-4)
+            sharpe_like = mean_return / std_return
+            sharpe_weight = torch.clamp(1.0 / (1.0 + torch.abs(sharpe_like)), min=0.1, max=1.0)
+            
+            return self.alpha * mse_loss + self.beta * directional_penalty * sharpe_weight
+
+        # Compute trading returns from last input price (entry point for trade)
+        # Handle both 2D and 3D cases
+        if pred.dim() == 2:
+            # 2D: [batch, pred_len]
+            last_price = input_data[:, -1:]  # [batch, 1]
+            pred_final = pred[:, -1:]  # [batch, 1] - final prediction
+            true_final = true[:, -1:]  # [batch, 1] - final true value
+        else:
+            # 3D: [batch, pred_len, feature_dim]
+            last_price = input_data[:, -1:, :]  # [batch, 1, feature_dim]
+            pred_final = pred[:, -1:, :]  # [batch, 1, feature_dim]
+            true_final = true[:, -1:, :]  # [batch, 1, feature_dim]
+
+        # Compute trading directions and returns
+        pred_dir = pred_final - last_price  # Predicted direction from entry
+        actual_return = true_final - last_price  # Actual return from trade (can be positive or negative)
+
+        # Smooth wrong-direction surrogate (differentiable)
+        smooth_wrong = torch.relu(-pred_dir * actual_return)
+
+        # Compute risk measure (volatility of actual returns across batch), with floor for stability
+        actual_return_flat = actual_return.flatten()
+        risk = torch.clamp(actual_return_flat.std() + self.eps, min=1e-4)
+
+        # Compute risk-adjusted return (Sharpe-like)
+        risk_adj_return = actual_return / risk  # [batch, 1] or [batch, 1, feature_dim]
+
+        # Risk-adjusted penalty: wrong-direction weighted by risk-adjusted magnitude (smooth)
+        risk_adj_penalty = (smooth_wrong * torch.abs(risk_adj_return)).mean()
+
+        # Sharpe-like weighting computed on actual returns; clamp so penalty always contributes
+        mean_return = actual_return_flat.mean()
+        std_return = actual_return_flat.std()
+        sharpe_like = mean_return / (std_return + self.eps)
+        sharpe_weight = torch.clamp(1.0 / (1.0 + torch.abs(sharpe_like)), min=0.1, max=1.0)
+
+        # Final loss: MSE + risk-adjusted directional penalty weighted by Sharpe
+        loss = self.alpha * mse_loss + self.beta * risk_adj_penalty * sharpe_weight
+
+        return loss

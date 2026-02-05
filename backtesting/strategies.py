@@ -5,22 +5,30 @@ class BaseAIStrategy(bt.Strategy):
     """Base strategy class with common AI prediction functionality"""
     
     params = (
-        ('prediction_horizon', 1), # Which prediction to use (1, ..., `pred_len` days ahead)
+        ('prediction_horizon', 24), # Which prediction to use (1, ..., `pred_len` days ahead)
         ('confidence_threshold', 0.01), # Minimum price change % to trigger trade
         ('position_size', 0.99),  # Percent of available cash to use
     )
     
     def __init__(self):
-        # Add prediction data as lines
-        self.prediction = self.datas[0].close_predicted_1  # Default to horizon 1
-        
-        # Set the correct prediction horizon
-        horizon = self.params.prediction_horizon
-        if hasattr(self.datas[0], f'close_predicted_{horizon}'):
-            self.prediction = getattr(self.datas[0], f'close_predicted_{horizon}')
-        
-        # Trick to include raw predictions in the plot
-        pred_plot = bt.indicators.SimpleMovingAverage(self.prediction, period=1, plotname=f'Raw Prediction {self.params.prediction_horizon}')
+        horizon = int(self.params.prediction_horizon)
+        line_name = f'close_predicted_{horizon}'
+
+        if not hasattr(self.datas[0], line_name):
+            available = sorted(
+                attr for attr in dir(self.datas[0]) if attr.startswith('close_predicted_')
+            )
+            raise AttributeError(
+                f"Prediction column '{line_name}' not available. Available columns: {available}"
+            )
+
+        self.prediction = getattr(self.datas[0], line_name)
+
+        bt.indicators.SimpleMovingAverage(
+            self.prediction,
+            period=1,
+            plotname=f'Raw Prediction {horizon}'
+        )
     
     def get_prediction_signal(self):
         """Get trading signal based on AI predictions"""
@@ -244,3 +252,26 @@ class TrendFollowingAIStrategy(BaseAIStrategy):
             # Sell if AI predicts down or trend changes
             if signal == -1 or not trend_up:
                 self.close()
+
+
+class BuyHoldStrategy(bt.Strategy):
+    """Buy-and-hold benchmark strategy."""
+
+    params = (
+        ('position_size', 0.99),
+    )
+
+    def __init__(self):
+        self.invested = False
+
+    def next(self):
+        if not self.position and not self.invested:
+            cash = self.broker.get_cash()
+            price = self.data.close[0]
+            if price <= 0:
+                return
+            size = (cash / price) * self.params.position_size
+            size = round(size, 8)
+            if size > 0:
+                self.buy(size=size)
+                self.invested = True

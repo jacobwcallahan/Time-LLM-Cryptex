@@ -17,7 +17,8 @@ def adjust_learning_rate(accelerator, optimizer, scheduler, epoch, args, printou
             10: 5e-7, 15: 1e-7, 20: 5e-8
         }
     elif args.lradj == 'type3':
-        lr_adjust = {epoch: args.learning_rate if epoch < 3 else args.learning_rate * (0.9 ** ((epoch - 3) // 1))}
+        # Keep full LR for 5 epochs, then decay by 0.95 per epoch (slower decay)
+        lr_adjust = {epoch: args.learning_rate if epoch < 5 else args.learning_rate * (0.95 ** ((epoch - 5) // 1))}
     elif args.lradj == 'PEMS':
         lr_adjust = {epoch: args.learning_rate * (0.95 ** (epoch // 1))}
     elif args.lradj == 'TST':
@@ -102,7 +103,14 @@ def vali(args, accelerator, model, vali_data, vali_loader, criterion, metric_fun
             pred = outputs.detach()
             true = batch_y.detach()
 
-            loss = criterion(pred, true)
+            # Extract last input price for trading loss calculation (before slicing input_data)
+            last_input_price = input_data[:, -1:, f_dim:] if args.features == 'MS' else input_data[:, -1:, :]
+            # Pass input_data to loss function if it accepts it
+            try:
+                loss = criterion(pred, true, last_input_price)
+            except TypeError:
+                # Loss function doesn't accept input_data parameter, call without it
+                loss = criterion(pred, true)
 
             metric_loss = metric_func(pred, true, input_data)
 

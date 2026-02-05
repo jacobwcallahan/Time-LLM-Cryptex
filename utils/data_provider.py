@@ -46,10 +46,15 @@ class Dataset_Crypto(Dataset):
         ordered_cols = ['timestamp'] + feature_cols + [self.target]
         df_raw = df_raw[ordered_cols]
 
-        # Split train/val/test by fixed proportions (70/10/20)
-        num_train = int(len(df_raw) * split_ratio[0])
-        num_test = int(len(df_raw) * split_ratio[1])
-        num_vali = len(df_raw) - num_train - num_test
+        # Split train/val/test by fixed proportions (80/10/10)
+        train_ratio = 0.8
+        val_ratio = 0.1
+        test_ratio = 0.1
+
+        total_len = len(df_raw)
+        num_train = int(total_len * train_ratio)
+        num_vali = int(total_len * val_ratio)
+        num_test = total_len - num_train - num_vali
         # Calculate borders for each split
         border1s = [0, num_train - self.seq_len, len(df_raw) - num_test - self.seq_len]
         border2s = [num_train, num_train + num_vali, len(df_raw)]

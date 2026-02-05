@@ -39,6 +39,28 @@ def cast_params(params):
         if k in params: params[k] = float(params[k])
     return params
 
+def detect_feature_set_from_path(data_path: str) -> str:
+    """
+    Detect feature set name from data_path and return appropriate prompt file name.
+    
+    Args:
+        data_path: Path to data CSV file
+    
+    Returns:
+        Prompt file name (without .txt extension) for --data argument
+    """
+    # Check if this is a feature-engineered dataset
+    if 'features_' in data_path:
+        # Extract feature set name from path like "candlesticks-D_features_momentum.csv"
+        parts = data_path.split('_features_')
+        if len(parts) == 2:
+            feature_set = parts[1].replace('.csv', '')
+            return f'CRYPTEX_features_{feature_set}'
+    
+    # Default to standard CRYPTEX prompt
+    return 'CRYPTEX'
+
+
 def load_mlflow_artifacts_and_args(model_id, llm_model, tracking_uri=None):
     # Load model state dict, and config params from MLflow
     if tracking_uri:
@@ -65,6 +87,9 @@ def main():
         cli_args.model_id, cli_args.llm_model, cli_args.mlflow_tracking_uri)
     # Allow CLI override for data_path
     if cli_args.data_path: args.data_path = cli_args.data_path
+    # Auto-detect feature set from data_path for prompt selection
+    args.data = detect_feature_set_from_path(args.data_path)
+    print(f"Auto-detected prompt file from data_path: {args.data}")
     # Load the full input data CSV
     df_raw = pd.read_csv(os.path.join(args.root_path, args.data_path))
     # Ensure columns are ordered: timestamp, features..., target

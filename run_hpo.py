@@ -68,7 +68,7 @@ def objective(trial):
     seq_len = trial.suggest_categorical("seq_len", [24, 36, 48])
     pred_len = trial.suggest_categorical("pred_len", [12, 24])
     num_tokens = trial.suggest_categorical("num_tokens", [100, 500, 1000])
-    loss = trial.suggest_categorical("loss", ["MSE", "MADL", "GMADL"])
+    loss = trial.suggest_categorical("loss", ["MSE", "MADL", "GMADL", "TRADING"])
     lradj = trial.suggest_categorical("lradj", ["type1", "type2", "type3", "PEMS", "TST", "constant"])
 
     n_heads = trial.suggest_categorical("n_heads", [2, 4, 8, 16])
