@@ -12,6 +12,44 @@ from strategies import (
     TrendFollowingAIStrategy, BuyHoldStrategy
 )
 
+
+class TradeRecorderAnalyzer(bt.Analyzer):
+    """Records (timestamp, action) for each trade open/close for plotting."""
+    def __init__(self):
+        self._trades = []
+
+    def notify_trade(self, trade):
+        try:
+            strat = self._owner
+            dt = strat.datas[0].datetime.datetime(0)
+        except Exception:
+            dt = None
+        if trade.justopened:
+            action = 'buy' if trade.long else 'sell'
+            self._trades.append({'timestamp': dt, 'action': action})
+        elif trade.status == trade.Closed:
+            action = 'sell' if trade.long else 'buy'
+            self._trades.append({'timestamp': dt, 'action': action})
+
+    def get_analysis(self):
+        return self._trades
+
+
+def get_prediction_columns_for_horizon(df: pd.DataFrame, h: int) -> list:
+    """Return column names for horizon h: close_predicted_{h} or close_predicted_{h}_*."""
+    prefix = f"close_predicted_{h}_"
+    exact = f"close_predicted_{h}"
+    out = []
+    for col in df.columns:
+        if not isinstance(col, str) or not col.startswith("close_predicted_"):
+            continue
+        if col == exact:
+            out.append(col)
+        elif col.startswith(prefix):
+            out.append(col)
+    return out
+
+
 def direction_mda_horizon(df: pd.DataFrame, pred_col: str, horizon: int) -> float:
     close = df["close"].astype(float)
     pred = df[pred_col].astype(float)
@@ -145,17 +183,22 @@ OPTIMIZATION_RANGES = {
 
 class BacktestRunner:
     """Main backtesting runner using backtrader"""
-    
-    def __init__(self, data_path, cash=100000, commission=0.001, train_data_path=None):
+
+    def __init__(self, data_path, cash=100000, commission=0.001, train_data_path=None,
+                 confidence=None, prediction_horizon=1):
         self.data_path = data_path
         self.cash = cash
         self.commission = commission
         self.train_data_path = train_data_path
+        self.confidence = confidence
+        self.prediction_horizon = prediction_horizon
         self.data = None
         self.data_feed_class = None
         self.results = {}
         self.load_data()
-    
+        if self.confidence is not None:
+            self._add_confidence_interval()
+
     def load_data(self):
         """Load and prepare data"""
         self.data, self.data_feed_class = load_and_prepare_data(
@@ -165,6 +208,33 @@ class BacktestRunner:
         cutoff = self.data.attrs.get('train_cutoff_timestamp')
         cutoff_str = f" | train_cutoff: {cutoff}" if cutoff is not None else ""
         print(f"Data loaded with shape: {self.data.shape} from {self.data.index.min()} to {self.data.index.max()}{cutoff_str}\n")
+
+    def _add_confidence_interval(self):
+        """Compute ci_lower/ci_upper from prediction columns and extend data feed."""
+        h = int(self.prediction_horizon)
+        cols = get_prediction_columns_for_horizon(self.data, h)
+        if len(cols) < self.confidence:
+            print(f"[Confidence] Only {len(cols)} columns for horizon {h}, need >= {self.confidence}; skipping CI.\n")
+            return
+        subset = self.data[cols]
+        n = subset.notna().sum(axis=1)
+        mean = subset.mean(axis=1)
+        std = subset.std(axis=1).fillna(0.0)
+        ci_mult = 1.96
+        lower = mean - ci_mult * std
+        upper = mean + ci_mult * std
+        mask = n < self.confidence
+        self.data["ci_lower"] = lower.where(~mask, np.nan)
+        self.data["ci_upper"] = upper.where(~mask, np.nan)
+        pred_cols = [c for c in self.data.columns if c.startswith("close_predicted_")]
+        all_lines = tuple(pred_cols) + ("ci_lower", "ci_upper")
+        all_params = tuple((c, c) for c in pred_cols) + (("ci_lower", "ci_lower"), ("ci_upper", "ci_upper"))
+        self.data_feed_class = type(
+            "PandasDataWithCI",
+            (bt.feeds.PandasData,),
+            {"lines": all_lines, "params": all_params},
+        )
+        print(f"[Confidence] CI from {len(cols)} columns (min_points={self.confidence}), added to plot.\n")
     
     def run_strategy(self, strategy_name):
         """Run a single strategy"""
@@ -195,6 +265,7 @@ class BacktestRunner:
         cerebro.addanalyzer(bt.analyzers.DrawDown, _name='drawdown')
         cerebro.addanalyzer(bt.analyzers.TradeAnalyzer, _name='trades')
         cerebro.addanalyzer(bt.analyzers.SQN, _name='sqn')
+        cerebro.addanalyzer(TradeRecorderAnalyzer, _name='trade_recorder')
         
         # Run backtest
         results = cerebro.run()
@@ -207,6 +278,7 @@ class BacktestRunner:
             'drawdown': strategy_result.analyzers.drawdown.get_analysis(),
             'trades': strategy_result.analyzers.trades.get_analysis(),
             'sqn': strategy_result.analyzers.sqn.get_analysis(),
+            'trade_recorder': strategy_result.analyzers.trade_recorder.get_analysis(),
         }
         
         # Store results
@@ -227,6 +299,20 @@ class BacktestRunner:
         }
         
         return cerebro, analyzer_results
+
+    def get_trade_dates(self, strategy_name):
+        """Return DataFrame with columns timestamp, action (buy/sell) for each trade."""
+        if strategy_name not in self.results:
+            return pd.DataFrame(columns=['timestamp', 'action'])
+        rec = self.results[strategy_name]['analyzers'].get('trade_recorder', [])
+        if not rec:
+            return pd.DataFrame(columns=['timestamp', 'action'])
+        df = pd.DataFrame(rec)
+        if df.empty or 'timestamp' not in df.columns:
+            return pd.DataFrame(columns=['timestamp', 'action'])
+        df['timestamp'] = pd.to_datetime(df['timestamp'], errors='coerce')
+        df = df.dropna(subset=['timestamp'])
+        return df[['timestamp', 'action']]
 
     def compute_mda(self, params):
         """Compute horizon MDA using sign(close_{t+h}-close_t) vs sign(pred-close_t)."""
@@ -613,8 +699,11 @@ def main():
     parser.add_argument('--train_days', type=int, default=60, help='Training days for walk-forward')
     parser.add_argument('--test_days', type=int, default=30, help='Test days for walk-forward')
     parser.add_argument('--step_days', type=int, default=30, help='Step days for walk-forward')
+    parser.add_argument('--export_trades', type=str, default=None,
+                        help='After running a strategy, write trade dates to this CSV (timestamp, action).')
+    parser.add_argument('--confidence', type=int, default=None,
+                        help='Min number of prediction columns per date to compute CI; CI is plotted on backtest graph. Requires --data to have that many columns for the horizon (e.g. close_predicted_1, close_predicted_1_1, ...).')
 
-    
     args = parser.parse_args()
 
     # Apply prediction_horizon to all AI strategies (not BuyHold) so the backtester
@@ -665,8 +754,16 @@ def main():
     train_data_path = None
     if not args.disable_train_cutoff:
         train_data_path = args.train_data or _auto_train_data_path(args.data)
-    
-    runner = BacktestRunner(args.data, cash=args.cash, commission=args.commission, train_data_path=train_data_path)
+
+    prediction_horizon = int(args.prediction_horizon) if args.prediction_horizon is not None else 1
+    runner = BacktestRunner(
+        args.data,
+        cash=args.cash,
+        commission=args.commission,
+        train_data_path=train_data_path,
+        confidence=args.confidence,
+        prediction_horizon=prediction_horizon,
+    )
     
     if args.optimize:
         # Optimize specific strategy
@@ -675,6 +772,10 @@ def main():
     elif args.strategy:
         # Run specific strategy
         runner.run_strategy(args.strategy)
+        if args.export_trades:
+            trades_df = runner.get_trade_dates(args.strategy)
+            trades_df.to_csv(args.export_trades, index=False)
+            print(f"Exported {len(trades_df)} trades to {args.export_trades}")
         runner.create_summary_table()
     
     elif args.walk_forward:

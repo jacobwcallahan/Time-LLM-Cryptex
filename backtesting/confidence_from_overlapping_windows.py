@@ -49,11 +49,13 @@ def compute_ci_from_directory(
     pred_col: str,
     horizon: int,
     ci_mult: float = 1.96,
+    min_points: int = 2,
 ) -> pd.DataFrame:
     """
     Load all CSV files in input_dir; each file = one window run.
     Align on timestamp: for each timestamp T we have one row per file with
     close_predicted_{horizon} = prediction for T+horizon. Aggregate to mean, std, CI.
+    When count < min_points, mean/std/lower/upper are set to NaN.
     """
     files = sorted(input_dir.glob("*.csv"))
     if not files:
@@ -83,8 +85,15 @@ def compute_ci_from_directory(
     n = wide.count(axis=1)
     mean = wide.mean(axis=1)
     std = wide.std(axis=1)
-    # Fill std when only one value so CI is still defined
     std = std.fillna(0.0)
+    lower = mean - ci_mult * std
+    upper = mean + ci_mult * std
+    mask = n < min_points
+    if mask.any():
+        mean = mean.where(~mask, np.nan)
+        std = std.where(~mask, np.nan)
+        lower = lower.where(~mask, np.nan)
+        upper = upper.where(~mask, np.nan)
 
     target_date = wide.index + pd.Timedelta(days=horizon)
 
@@ -94,8 +103,8 @@ def compute_ci_from_directory(
             "target_date": target_date,
             f"{pred_col}_mean": mean,
             f"{pred_col}_std": std,
-            f"{pred_col}_lower": mean - ci_mult * std,
-            f"{pred_col}_upper": mean + ci_mult * std,
+            f"{pred_col}_lower": lower,
+            f"{pred_col}_upper": upper,
             f"{pred_col}_count": n.astype(int),
         }
     )
@@ -109,10 +118,12 @@ def compute_ci_from_single_csv(
     pred_col: str,
     horizon: int,
     ci_mult: float = 1.96,
+    min_points: int = 2,
 ) -> pd.DataFrame:
     """
     Single CSV with a column run_id_col (e.g. window_id 1..30).
     Group by timestamp, aggregate pred_col across runs.
+    When count < min_points, mean/std/lower/upper are set to NaN.
     """
     df = pd.read_csv(input_csv)
     for c in ["timestamp", run_id_col, pred_col]:
@@ -126,6 +137,9 @@ def compute_ci_from_single_csv(
     agg["std"] = agg["std"].fillna(0.0)
     agg["lower"] = agg["mean"] - ci_mult * agg["std"]
     agg["upper"] = agg["mean"] + ci_mult * agg["std"]
+    mask = agg["count"] < min_points
+    if mask.any():
+        agg.loc[mask, ["mean", "std", "lower", "upper"]] = np.nan
     agg = agg.reset_index()
     agg["target_date"] = agg["timestamp"] + pd.Timedelta(days=horizon)
     agg = agg.rename(columns={
@@ -177,6 +191,12 @@ def main():
         default=1.96,
         help="Multiplier for std to get CI (default 1.96 ~ 95%%).",
     )
+    ap.add_argument(
+        "--min_points",
+        type=int,
+        default=2,
+        help="Minimum overlapping predictions required to emit CI; else mean/std/lower/upper are NaN (default: 2).",
+    )
     args = ap.parse_args()
 
     pred_col = f"close_predicted_{args.horizon}"
@@ -187,6 +207,7 @@ def main():
             pred_col=pred_col,
             horizon=args.horizon,
             ci_mult=args.ci_mult,
+            min_points=args.min_points,
         )
     else:
         out = compute_ci_from_single_csv(
@@ -195,6 +216,7 @@ def main():
             pred_col=pred_col,
             horizon=args.horizon,
             ci_mult=args.ci_mult,
+            min_points=args.min_points,
         )
 
     args.output_csv.parent.mkdir(parents=True, exist_ok=True)
