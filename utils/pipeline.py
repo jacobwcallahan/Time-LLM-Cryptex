@@ -60,6 +60,10 @@ def run_inference(model_id,
         path to the OHLCV inference data
     """
 
+    if not os.path.exists(dataset_path):
+        dataset_path = Path("/data-fast/nfs/datasets/")
+    
+
     os.makedirs("temp", exist_ok=True)
 
     # Sets the save path for the inference data

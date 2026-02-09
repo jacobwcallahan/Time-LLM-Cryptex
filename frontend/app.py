@@ -10,10 +10,16 @@ import subprocess
 import os
 from datetime import datetime
 import sys
-from helper_fcns import check_inf_after_train, start_before_end, end_after_start
 
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(".."))))
-import backtesting.backtest as bt
+from helper_fcns import (
+    check_inf_after_train, 
+    start_before_end, 
+    end_after_start,
+    run_inference_handler,
+    check_and_plot_mlflow_inference,
+    run_backtest
+)
+
 
 # Default prompt from CRYPTEX.txt
 DEFAULT_PROMPT = """The Binance Bitcoin Hourly Returns (BTC-H) dataset captures granular financial data from the Binance.us cryptocurrency exchange. It spans nearly four months, from July 2024 to December 2024, with hourly-level resolution. Each record contains updates for returns of hourly closing prices and traded volume in USD. Timestamps are stored in Unix time format. Inactive periods (with no trading activity) are represented with NaN values, while missing timestamps may reflect exchange/API downtime or data collection limitations. The dataset has been carefully deduplicated and validated, and is updated nightly to ensure consistency and completeness."""
@@ -602,17 +608,27 @@ with gr.Blocks(title="Time-LLM-Cryptex", theme=gr.themes.Citrus()) as app:
             
             with gr.Row():
                 with gr.Column():
-                    inf_model_path = gr.Textbox(
-                        label="Model Path",
-                        placeholder="path/to/checkpoint.pth",
-                        info="Path to the trained model checkpoint"
+                    inf_model_name = gr.Textbox(
+                        label="Model Name (Run ID)",
+                        placeholder="e.g. abc123def456",
+                        info="MLflow Run ID of the trained model"
                     )
-                    inf_data_path = gr.Textbox(
-                        label="Data Path",
+                    inf_experiment_name = gr.Textbox(
+                        label="Experiment Name",
+                        placeholder="e.g. my_experiment",
+                        info="MLflow experiment name"
+                    )
+                    inf_custom_dataset_path = gr.Textbox(
+                        label="Custom Data Path (Optional)",
                         placeholder="path/to/data.csv",
-                        info="Path to the input data for inference"
+                        info="Path to the custom dataset"
                     )
-                    inf_gpu = gr.Textbox(label="GPU", value="0", info="GPU to use for inference")
+                    inf_granularity = gr.Dropdown(
+                        label="Granularity",
+                        choices=["daily", "hourly", "minute", "weekly"],
+                        value="daily",
+                        info="Data granularity"
+                    )
                 
                 with gr.Column():
                     inf_start_date = gr.DateTime(
@@ -627,19 +643,49 @@ with gr.Blocks(title="Time-LLM-Cryptex", theme=gr.themes.Citrus()) as app:
                         info="Inference end date (YYYY-MM-DD)",
                         include_time=False
                     )
-                    inf_output_path = gr.Textbox(
-                        label="Output Path",
-                        value="backtesting/data/inference.csv",
-                        info="Path to save inference results"
+                    inf_aggregate = gr.Number(
+                        label="Aggregate",
+                        value=1,
+                        info="Aggregation factor"
                     )
             
             run_inference_btn = gr.Button("Run Inference", variant="primary")
             inference_output = gr.Textbox(label="Inference Output", lines=15, interactive=False)
+    
+            run_inference_btn.click(
+                fn=run_inference_handler,
+                inputs=[inf_model_name, inf_experiment_name, inf_custom_dataset_path, inf_granularity, inf_aggregate, inf_start_date, inf_end_date],
+                outputs=inference_output
+            )
             
-            gr.Markdown("### Inference Results")
-            inference_results = gr.Dataframe(
-                label="Predictions",
-                interactive=False
+
+            gr.Markdown("---")
+            gr.Markdown("### Load Inference from MLflow")
+            gr.Markdown("Check if inference data exists in MLflow for a given run and visualize it as a candlestick chart with prediction overlay.")
+            
+            with gr.Row():
+                mlflow_run_id = gr.Textbox(
+                    label="MLflow Run ID",
+                    placeholder="e.g. abc123def456",
+                    info="Enter the MLflow Run ID to check for inference data"
+                )
+                mlflow_pred_horizon = gr.Number(
+                    label="Prediction Horizon",
+                    value=1,
+                    minimum=1,
+                    step=1,
+                    info="Number of steps ahead to plot (1 = 1 ahead, 2 = 2 ahead, etc.)"
+                )
+                check_mlflow_btn = gr.Button("Check & Plot Inference", variant="secondary")
+                
+            
+            mlflow_status = gr.Textbox(label="Status", interactive=False, lines=3)
+            mlflow_inference_plot = gr.Plot(label="Inference Data Visualization (Candlestick + Prediction)")
+            
+            check_mlflow_btn.click(
+                fn=check_and_plot_mlflow_inference,
+                inputs=[mlflow_run_id, mlflow_pred_horizon],
+                outputs=[mlflow_status, mlflow_inference_plot]
             )
         
         # =====================================================================
@@ -689,16 +735,6 @@ with gr.Blocks(title="Time-LLM-Cryptex", theme=gr.themes.Citrus()) as app:
             
             run_backtest_btn = gr.Button("Run Backtest", variant="primary")
             backtest_output = gr.Textbox(label="Backtest Output", lines=10, interactive=False)
-
-            def run_backtest(inference_path, strategy, initial_capital, start_date, end_date, threshold):
-                return bt.main({
-                    'data': inference_path,
-                    'strategy': strategy,
-                    'initial_capital': initial_capital,
-                    'start_date': start_date,
-                    'end_date': end_date,
-                    'threshold': threshold
-                })
 
             run_backtest_btn.click(
                 fn=run_backtest,

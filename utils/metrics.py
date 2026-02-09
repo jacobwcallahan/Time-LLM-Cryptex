@@ -18,11 +18,7 @@ def get_loss_function(loss_name):
     elif loss_name == 'MADLSTE':
         return MADLLossSTE()
     elif loss_name == 'TRADING' or loss_name == 'SHARPE':
-        return DifferentiableTradingLoss(metric='sharpe')
-    elif loss_name == 'SORTINO':
-        return DifferentiableTradingLoss(metric='sortino')
-    elif loss_name == 'TRADING_RETURNS':
-        return DifferentiableTradingLoss(metric='returns')
+        return TradingLoss()
     else:
         raise ValueError(f"Unsupported loss type: {loss_name}")
 
@@ -206,175 +202,107 @@ class MDAChange(nn.Module):
         pass
 
 
-class DifferentiableTradingLoss(nn.Module):
+class TradingLoss(nn.Module):
     """
-    Differentiable approximation of backtester performance.
+    Trading-oriented loss function combining MSE with risk-adjusted directional penalty.
+    Penalizes wrong trading decisions proportionally to risk-adjusted loss magnitude.
     
-    Instead of discrete buy/sell decisions, uses soft positions via tanh
-    to maintain gradient flow during backpropagation.
-    
-    The model learns to maximize trading performance (Sharpe ratio) directly,
-    rather than minimizing prediction error.
+    Formula: loss = alpha * MSE(pred, true) + beta * risk_adj_penalty * sharpe_weight
     
     Args:
-        confidence_threshold: Minimum expected return to trigger a position (default 0.01 = 1%)
-        transaction_cost: Cost per unit of position change (default 0.001 = 0.1%)
-        temperature: Controls sharpness of position decisions (higher = more binary-like)
-        metric: Trading metric to optimize ('sharpe', 'sortino', 'returns')
-        annualization_factor: Factor to annualize returns (e.g., 252 for daily, 365*24 for hourly)
-        eps: Small constant for numerical stability
+        alpha: Weight for MSE component (default: 1.0)
+        beta: Weight for directional penalty component (default: 1.0)
+        eps: Small epsilon to avoid division by zero (default: 1e-8)
     """
-    def __init__(
-        self, 
-        confidence_threshold: float = 0.01,
-        transaction_cost: float = 0.001,
-        temperature: float = 10.0,
-        metric: str = 'sharpe',
-        annualization_factor: float = 252.0,
-        eps: float = 1e-8
-    ):
+    def __init__(self, alpha=1.0, beta=1.0, eps=1e-8):
         super().__init__()
-        self.confidence_threshold = confidence_threshold
-        self.transaction_cost = transaction_cost
-        self.temperature = temperature
-        self.metric = metric.lower()
-        self.annualization_factor = annualization_factor
+        self.alpha = alpha
+        self.beta = beta
         self.eps = eps
-    
-    def forward(self, pred: torch.Tensor, true: torch.Tensor) -> torch.Tensor:
+
+    def forward(self, pred: torch.Tensor, true: torch.Tensor, input_data: torch.Tensor = None) -> torch.Tensor:
         """
-        Compute differentiable trading loss.
+        Compute trading loss with risk-adjusted returns.
         
         Args:
-            pred: [batch, pred_len, features] - predicted prices
-            true: [batch, pred_len, features] - actual prices
-        
+            pred: [batch, pred_len] or [batch, pred_len, feature_dim] - predicted values
+            true: [batch, pred_len] or [batch, pred_len, feature_dim] - true values
+            input_data: [batch, seq_len] or [batch, seq_len, feature_dim] - input sequence (optional)
+                        Used to compute trading returns from entry price. If None, falls back to MSE-only for pred_len=1.
+            
         Returns:
-            Negative trading metric (to minimize = maximize performance)
+            Scalar loss tensor
         """
-        # Need at least 2 timesteps to compute returns
-        if pred.shape[1] < 2:
-            return torch.tensor(0.0, device=pred.device, requires_grad=True)
-        
-        # Calculate actual returns from true prices
-        actual_returns = (true[:, 1:] - true[:, :-1]) / (true[:, :-1].abs() + self.eps)
-        
-        # Calculate predicted returns (what the model expects to happen)
-        predicted_returns = (pred[:, 1:] - pred[:, :-1]) / (pred[:, :-1].abs() + self.eps)
-        
-        # Soft position sizing using tanh for differentiability
-        # Maps predicted return to position in [-1, 1] (short to long)
-        # temperature controls how "sharp" the decision boundary is
-        positions = torch.tanh(
-            self.temperature * predicted_returns / (self.confidence_threshold + self.eps)
-        )
-        
-        # Strategy returns = position * actual_return
-        # If we predict up (position > 0) and price goes up (return > 0), we profit
-        strategy_returns = positions * actual_returns
-        
-        # Account for transaction costs based on position changes
-        if positions.shape[1] > 1:
-            position_changes = torch.abs(positions[:, 1:] - positions[:, :-1])
-            # Pad first timestep with initial position change (from 0 to first position)
-            initial_change = torch.abs(positions[:, :1])
-            position_changes = torch.cat([initial_change, position_changes], dim=1)
+        # Ensure same shape
+        if pred.shape != true.shape:
+            raise ValueError(f"Shape mismatch: pred {pred.shape}, true {true.shape}")
+
+        # MSE component - standard regression loss to narrow down predictions
+        mse_loss = torch.mean((pred - true) ** 2)
+
+        # If input_data is not provided, use fallback logic
+        if input_data is None:
+            # For pred_len=1, can't compute trading returns without input, return MSE-only
+            if pred.shape[1] == 1:
+                return self.alpha * mse_loss
+            
+            # For pred_len>1, use returns-based logic as fallback (smooth directional penalty)
+            if pred.dim() == 2:
+                pred_returns = pred[:, 1:] - pred[:, :-1]
+                true_returns = true[:, 1:] - true[:, :-1]
+            else:
+                pred_returns = pred[:, 1:, :] - pred[:, :-1, :]
+                true_returns = true[:, 1:, :] - true[:, :-1, :]
+            
+            smooth_wrong = torch.relu(-pred_returns * true_returns)
+            return_error = torch.abs(pred_returns - true_returns)
+            directional_penalty = (smooth_wrong * return_error).mean()
+            
+            true_returns_flat = true_returns.flatten()
+            mean_return = true_returns_flat.mean()
+            std_return = torch.clamp(true_returns_flat.std() + self.eps, min=1e-4)
+            sharpe_like = mean_return / std_return
+            sharpe_weight = torch.clamp(1.0 / (1.0 + torch.abs(sharpe_like)), min=0.1, max=1.0)
+            
+            return self.alpha * mse_loss + self.beta * directional_penalty * sharpe_weight
+
+        # Compute trading returns from last input price (entry point for trade)
+        # Handle both 2D and 3D cases
+        if pred.dim() == 2:
+            # 2D: [batch, pred_len]
+            last_price = input_data[:, -1:]  # [batch, 1]
+            pred_final = pred[:, -1:]  # [batch, 1] - final prediction
+            true_final = true[:, -1:]  # [batch, 1] - final true value
         else:
-            position_changes = torch.abs(positions)
-        
-        transaction_costs = position_changes * self.transaction_cost
-        net_returns = strategy_returns - transaction_costs
-        
-        # Flatten for metric calculation
-        net_returns_flat = net_returns.reshape(net_returns.shape[0], -1)
-        
-        # Calculate the chosen metric
-        if self.metric == 'sharpe':
-            loss = self._negative_sharpe(net_returns_flat)
-        elif self.metric == 'sortino':
-            loss = self._negative_sortino(net_returns_flat)
-        elif self.metric == 'returns':
-            loss = -net_returns_flat.sum(dim=1).mean()  # Negative total return
-        else:
-            raise ValueError(f"Unknown metric: {self.metric}")
-        
+            # 3D: [batch, pred_len, feature_dim]
+            last_price = input_data[:, -1:, :]  # [batch, 1, feature_dim]
+            pred_final = pred[:, -1:, :]  # [batch, 1, feature_dim]
+            true_final = true[:, -1:, :]  # [batch, 1, feature_dim]
+
+        # Compute trading directions and returns
+        pred_dir = pred_final - last_price  # Predicted direction from entry
+        actual_return = true_final - last_price  # Actual return from trade (can be positive or negative)
+
+        # Smooth wrong-direction surrogate (differentiable)
+        smooth_wrong = torch.relu(-pred_dir * actual_return)
+
+        # Compute risk measure (volatility of actual returns across batch), with floor for stability
+        actual_return_flat = actual_return.flatten()
+        risk = torch.clamp(actual_return_flat.std() + self.eps, min=1e-4)
+
+        # Compute risk-adjusted return (Sharpe-like)
+        risk_adj_return = actual_return / risk  # [batch, 1] or [batch, 1, feature_dim]
+
+        # Risk-adjusted penalty: wrong-direction weighted by risk-adjusted magnitude (smooth)
+        risk_adj_penalty = (smooth_wrong * torch.abs(risk_adj_return)).mean()
+
+        # Sharpe-like weighting computed on actual returns; clamp so penalty always contributes
+        mean_return = actual_return_flat.mean()
+        std_return = actual_return_flat.std()
+        sharpe_like = mean_return / (std_return + self.eps)
+        sharpe_weight = torch.clamp(1.0 / (1.0 + torch.abs(sharpe_like)), min=0.1, max=1.0)
+
+        # Final loss: MSE + risk-adjusted directional penalty weighted by Sharpe
+        loss = self.alpha * mse_loss + self.beta * risk_adj_penalty * sharpe_weight
+
         return loss
-    
-    def _negative_sharpe(self, returns: torch.Tensor) -> torch.Tensor:
-        """
-        Compute negative Sharpe ratio (we minimize, so negative = maximize Sharpe).
-        
-        Args:
-            returns: [batch, num_returns] - strategy returns per timestep
-        
-        Returns:
-            Negative annualized Sharpe ratio (scalar)
-        """
-        mean_return = returns.mean(dim=1)
-        std_return = returns.std(dim=1) + self.eps
-        
-        # Annualize
-        sharpe = (mean_return / std_return) * torch.sqrt(
-            torch.tensor(self.annualization_factor, device=returns.device)
-        )
-        
-        return -sharpe.mean()
-    
-    def _negative_sortino(self, returns: torch.Tensor) -> torch.Tensor:
-        """
-        Compute negative Sortino ratio (penalizes only downside volatility).
-        
-        Args:
-            returns: [batch, num_returns] - strategy returns per timestep
-        
-        Returns:
-            Negative annualized Sortino ratio (scalar)
-        """
-        mean_return = returns.mean(dim=1)
-        
-        # Downside deviation: std of negative returns only
-        negative_returns = torch.clamp(returns, max=0)
-        downside_std = torch.sqrt((negative_returns ** 2).mean(dim=1)) + self.eps
-        
-        # Annualize
-        sortino = (mean_return / downside_std) * torch.sqrt(
-            torch.tensor(self.annualization_factor, device=returns.device)
-        )
-        
-        return -sortino.mean()
-
-
-class DifferentiableTradingLossWithContext(DifferentiableTradingLoss):
-    """
-    Extended trading loss that uses the input sequence context for position decisions.
-    
-    This version takes the last price from the input sequence to compute
-    the expected return for the first prediction, making it more realistic.
-    
-    Use this when you have access to both input and output sequences.
-    """
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
-    
-    def forward_with_context(
-        self, 
-        pred: torch.Tensor, 
-        true: torch.Tensor,
-        last_input_price: torch.Tensor
-    ) -> torch.Tensor:
-        """
-        Compute trading loss with context from input sequence.
-        
-        Args:
-            pred: [batch, pred_len, features] - predicted prices
-            true: [batch, pred_len, features] - actual prices  
-            last_input_price: [batch, 1, features] - last price from input sequence
-        
-        Returns:
-            Negative trading metric
-        """
-        # Prepend last input price to create full price series
-        pred_full = torch.cat([last_input_price, pred], dim=1)
-        true_full = torch.cat([last_input_price, true], dim=1)
-        
-        return self.forward(pred_full, true_full)

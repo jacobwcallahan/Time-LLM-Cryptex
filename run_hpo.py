@@ -46,8 +46,12 @@ import yaml
 from pathlib import Path
 from utils.pipeline import run_inference, perform_backtest, convert_to_returns, aggregate_data, get_mse_vals, get_mda_vals, get_mae_vals
 import warnings
-import sqlite3
 import shutil
+
+from hpo_core.DataManager import DataManager
+from hpo_core.WorkDir import WorkDir
+from hpo_core.HpoArgs import HpoArgs
+from hpo_core.OptunaParams import OptunaParams
 
 # --- Centralized Configuration ---
 MLFLOW_SERVER_IP = "192.168.1.103"
@@ -60,7 +64,6 @@ os.environ["AWS_SECRET_ACCESS_KEY"] = "minioadmin"
 os.environ["MLFLOW_S3_ENDPOINT_URL"] = f"http://{MLFLOW_SERVER_IP}:9000"
 
 llm_model = "LLAMA3.1"
-OPTUNA_STORAGE_PATH = "sqlite:////data-fast/nfs/mlflow/optuna_study.db" # Optuna storage path
 DATASET_PATH = Path("./dataset/candles/") # Dataset path for gpu1 (without specific dataset)
 DATA_PATH = Path("temp/data.csv") # Data path in temp folder
 INF_PATH = Path("temp/inf_data.csv") # Inference path in temp folder
@@ -84,29 +87,6 @@ ARGS = {"gpu": 1,
         "model_id_name": None,
         "volatility": False}
 
-
-def parse_args():
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--gpu', type=str, default='1', help='If not GPU 1, changes OPTUNA_STORAGE_PATH.')
-    parser.add_argument('--study_name', type=str, default='', help='If not empty, uses the study name. Model name is added to the beginning of the study name.')
-    parser.add_argument('--granularity', type=str, default='daily', help='Granularity to use. daily, hourly, weekly, minute')
-    parser.add_argument('--start', type=str, default=None, help='Start date to use. Format: YYYY-MM-DD')
-    parser.add_argument('--end', type=str, default=None, help='End date to use. Format: YYYY-MM-DD')
-    parser.add_argument('--inf_start', type=str, default=None, help='Start date to use for inference. Format: YYYY-MM-DD')
-    parser.add_argument('--inf_end', type=str, default=None, help='End date to use for inference. Format: YYYY-MM-DD')
-    parser.add_argument('--data_path', type=str, default=None, help='Data path to use.(Optional, if not provided, uses the full daily dataset)')
-    parser.add_argument("--returns", action='store_true', help='If True, converts the data to returns.')
-    parser.add_argument('--backtest', action='store_true', help='If set, run backtest after training')
-    parser.add_argument('--experiment_name', type=str, default=None, help='Experiment name to use. Default is None.')
-    parser.add_argument('--trials', type=int, default=10, help='Number of trials to run.')
-    parser.add_argument('--aggregate', type=int, default=1, help='If set, aggregates from the original granularity to the specified granularity.')
-    parser.add_argument('--no_inf_aggregate', action='store_true', help='By default, aggregates inference data. Set this flag to disable aggregation.')
-    parser.add_argument('--log_all_metrics', action='store_true', help='By default, logs only the best metric to MLflow. Set this flag to log all metrics (still logs as artifacts).')
-    parser.add_argument('--yaml_file', type=str, default='optuna_vars.yaml', help='YAML file to use for the study. Default is optuna_vars.yaml. Contained in ./config/')
-    parser.add_argument('--model_id_name', type=str, default=None, help='Name to use for the model id, trail number is added to the end. Default is set by a series of parameters.')
-    parser.add_argument('--volatility', action='store_true', help='If True, uses the volatility target.')
-    return parser.parse_args()
-  
 
 # Helper function
 def _find_mlflow_run(client, experiment_name, model_id):
@@ -257,7 +237,7 @@ def set_optuna_vars(trial, data_path, yaml_file):
 
     params["target"] = "returns" if ARGS["returns"] else "close"
     params['target'] = "volatility" if ARGS["volatility"] else params["target"]
-    params["metric"] = "SHARPE"
+    params["metric"] = "MSE"
     #params["dates"] = f"{ARGS["start"]}_{ARGS["end"]}"
     params["experiment_name"] = ARGS["experiment_name"] or llm_model
 
@@ -266,7 +246,7 @@ def set_optuna_vars(trial, data_path, yaml_file):
     trial.set_user_attr("aggregate", ARGS["aggregate"])
     trial.set_user_attr("target", params["target"])
     trial.set_user_attr("data_type", "returns" if ARGS["returns"] else "ohlcv")
-    trial.set_user_attr("metric", "SHARPE")
+    trial.set_user_attr("metric", "MSE")
     
     print("--------------------------------\n")
     print("Trial Parameters:")
@@ -526,162 +506,34 @@ def objective(trial):
         # Tell Optuna this trial failed and should be pruned.
         raise optuna.exceptions.TrialPruned()
 
-def main(   
-        gpu = 1, 
-        study_name = '', 
-        granularity = 'daily', 
-        start = None, 
-        end = None, 
-        inf_start = None, 
-        inf_end = None, 
-        data_path = None, 
-        returns = False, 
-        backtest = False, 
-        experiment_name = None, 
-        trials = 10, 
-        aggregate = 1, 
-        no_inf_aggregate = False, 
-        log_all_metrics = False, 
-        yaml_file = 'optuna_vars.yaml', 
-        volatility = False,
-        model_id_name = None):
+def main(args: HpoArgs):
+   
     # --- 5. Create and Run the Optuna Study ---
     # The 'study_name' will group your runs. If you restart the script, it will resume.
     # 'storage' tells Optuna to save results to a local SQLite database.
 
-    ARGS.update(locals()) # Updates the ARGS dictionary with the local variables 
-    #! WARNING: This is a hack to get the local variables into the ARGS dictionary. It is not a good practice and should be avoided.
+    WorkDir.create_work_dir()
 
-    global DATASET_PATH, OPTUNA_STORAGE_PATH, INFERENCE, llm_model
-
-
-    os.makedirs("temp", exist_ok=True)
-    org_data_path = Path("temp") / "org_data.csv"
 
     if ARGS["gpu"] != '1': # If the GPU is not 1, uses the NFS server for the storage path
         OPTUNA_STORAGE_PATH = f"sqlite:////mnt/nfs/mlflow/optuna_study.db"
         #** DATASET_PATH = Path("/mnt/nfs/datasets/")
         #** ignored while the /mnt nfs is not mounted
 
-    print(f"Inference start: {ARGS['inf_start']}, Inference end: {ARGS['inf_end']}")
 
     INFERENCE = ARGS['inf_start'] is not None or ARGS['inf_end'] is not None
     
-    # Sets the dataset path based on the granularity argument
-    if ARGS["granularity"].lower() in ['daily', 'd']:
-        DATASET_PATH = DATASET_PATH / "candlesticks-D.csv"
-    elif ARGS["granularity"].lower() in ['hourly', 'h']:
-        DATASET_PATH = DATASET_PATH / "candlesticks-h.csv"
-    elif ARGS["granularity"].lower() in ['weekly', 'w']:
-        DATASET_PATH = DATASET_PATH / "candlesticks-W.csv"
-    elif ARGS["granularity"].lower() in ['minute', 'min']:
-        DATASET_PATH = DATASET_PATH / "candlesticks-Min.csv"
-
-    print(f"Dataset path: {DATASET_PATH}")
-
-
-    if ARGS["data_path"] is None and ARGS["start"] is None:
-        warnings.warn("""Data path and start date are not provided - Will start from the beginning of the dataset. 
-        If no end date is provided, it will use the entire dataset.
-        If inference is enabled, it will use the entire dataset for inference.""")
 
     print(f"Prepping Data...")
-
-    if ARGS["data_path"] is not None and ARGS["data_path"] != "None": # If the data path is provided, uses the data path
-        print(type(ARGS['data_path']))
-        print(f"Using provided dataset: {ARGS['data_path']}")
-        full_data = pd.read_csv(ARGS["data_path"])
-        inf_data = pd.read_csv(ARGS["data_path"])
-    else:
-        try:
-            print(f"Reading dataset from: {DATASET_PATH}")
-            full_data = pd.read_csv(DATASET_PATH)
-            inf_data = full_data.copy()
-        except Exception as e:
-            raise ValueError(f"Error reading the dataset: \n{e}")
-
-    first_time = datetime.fromtimestamp(int(full_data.iloc[0]['timestamp'])).timestamp()
-    last_time = datetime.fromtimestamp(int(full_data.iloc[-1]['timestamp'])).timestamp()
-
-    # Checks formatting and validity of start date
-    if ARGS["start"]:
-        try:
-            start = datetime.strptime(ARGS["start"], '%Y-%m-%d').timestamp()
-            print(start)
-            print(type(start))
-        except:
-            warnings.warn(f"Incorrect Format for start date. Start time is now first date of dataset: {datetime.fromtimestamp(first_time).date()}\n")
-            start = first_time
-        if start < first_time:
-            warnings.warn(f"Start date is before the first date of the dataset. Using the first date of the dataset: {datetime.fromtimestamp(first_time).date()}\n")
-            start = first_time
-        elif start > last_time:
-            raise ValueError(f"Start date is after the last date of the dataset. The start date {ARGS['start']} is after the last date {datetime.fromtimestamp(last_time).date()}.\n")
-    else:
-        warnings.warn(f"No start date provided. Using the first date of the dataset: {datetime.fromtimestamp(first_time).date()}")
-        start = first_time
-
-    # Checks formatting and validity of end date
-    if ARGS["end"]:
-        try:
-            end = datetime.strptime(ARGS["end"], '%Y-%m-%d').timestamp()
-        except:
-            warnings.warn(f"Incorrect Format for end date. End time is now first date of dataset: {datetime.fromtimestamp(first_time).date()}\n")
-            end = last_time
-        if end < last_time:
-            warnings.warn(f"End date is before the end date of the dataset. Using the last date of the dataset: {datetime.fromtimestamp(last_time).date()}\n")
-            end = last_time
-        elif end < first_time:
-            raise ValueError(f"End date is before the first date of the dataset. The end date {ARGS['end']} is before the first date {datetime.fromtimestamp(last_time).date()}.\n")
-    else:
-        warnings.warn(f"No end date provided. Using the last date of the dataset: {datetime.fromtimestamp(last_time).date()}\n")
-        end = last_time
-
-    full_data = full_data[(full_data['timestamp'] >= start) & (full_data['timestamp'] <= end)]
-    
-    # Checks if the start and end dates are provided and if the start date is after the end date
-    if ARGS["start"] is not None and ARGS["end"] is not None:
-        if start > end:
-            warnings.warn(f"The start date given ({ARGS['end']}) is after the end date given ({datetime.fromtimestamp(end).date()}). Using the last date of the dataset: {datetime.fromtimestamp(last_time).date()} as the end date.\n")
-            end = last_time
-
-    if ARGS["aggregate"]: # If the aggregate period is provided, aggregates the data
-        full_data = aggregate_data(full_data, ARGS["aggregate"])
-    
-    full_data.to_csv(org_data_path, index=False)
-
-    print("Training data is Prepped... Prepping Inference data...")
+    data_manager = DataManager(granularity = ARGS["granularity"], 
+                               start_date = ARGS["start"], 
+                               end_date = ARGS["end"], 
+                               inf_start_date = ARGS["inf_start"], 
+                               inf_end_date = ARGS["inf_end"], 
+                               aggregate = ARGS["aggregate"], 
+                               custom_dataset_path = ARGS["data_path"])
 
     
-    # If inference is enabled, we need to filter the inference data based on the inference start and end dates
-    inf_start = None
-    inf_end = None
-    if INFERENCE:
-        if ARGS["inf_start"]:
-            inf_start = datetime.strptime(ARGS["inf_start"], '%Y-%m-%d').timestamp()
-            if inf_start < end and inf_start > start:
-                warnings.warn(f"Inference start is after the end date. Moving the end date to the inference start: {datetime.fromtimestamp(end).date()}\n")
-                end = inf_start
-            
-
-            inf_data = inf_data[inf_data['timestamp'] >= inf_start]
-
-        if ARGS["inf_end"]:
-            inf_end = datetime.strptime(ARGS["inf_end"], '%Y-%m-%d').timestamp()
-            if inf_end > last_time:
-                warnings.warn(f"Inference end is after the last date of the dataset. Using the last date of the dataset: {datetime.fromtimestamp(last_time).date()}\n")
-                inf_end = last_time
-
-            inf_data = inf_data[inf_data['timestamp'] <= inf_end]
-        
-        inf_data.to_csv(Path("temp") / "org_inf_data.csv", index=False)
-    
-    full_data = full_data[(full_data['timestamp'] >= start) & (full_data['timestamp'] <= end)]
-    full_data.to_csv(org_data_path, index=False)
-
-
-    print("Inference data is Prepped... Starting HPO...")
-
 
     if ARGS["study_name"] == '': # Uses the default study name
         study_name = f"{llm_model.lower()}_study"
@@ -720,25 +572,8 @@ def main(
         shutil.rmtree("temp")
 
 if __name__ == "__main__":
-    args = parse_args()
+    args = HpoArgs().args
 
     # Loads the arguments into the main function
     # Ensures values are set to None and not 'None'
-    main(gpu = args.gpu,
-         study_name = args.study_name, 
-         granularity = str(args.granularity) if args.granularity is not None else None,
-         start = str(args.start) if args.start is not None else None,
-         end = str(args.end) if args.end is not None else None,
-         inf_start = str(args.inf_start) if args.inf_start is not None else None,
-         inf_end = str(args.inf_end) if args.inf_end is not None else None,
-         data_path = str(args.data_path) if args.data_path is not None else None,
-         returns = args.returns, 
-         backtest = args.backtest, 
-         experiment_name = str(args.experiment_name) if args.experiment_name is not None else None,
-         trials = int(args.trials), 
-         aggregate = int(args.aggregate), 
-         no_inf_aggregate = args.no_inf_aggregate, 
-         log_all_metrics = args.log_all_metrics, 
-         yaml_file = str(args.yaml_file) if args.yaml_file is not None else None,
-         model_id_name = str(args.model_id_name) if args.model_id_name is not None else None,
-         volatility = args.volatility)
+    main(args)
