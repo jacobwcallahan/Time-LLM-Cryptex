@@ -1,12 +1,16 @@
 import yaml
 from pathlib import Path
+from hpo_core.WorkDir import WorkDir
+from hpo_core.HpoArgs import HpoArgs
 
 class OptunaParams:
     """
     This class is responsible for storing the optuna parameters.
     """
-    def __init__(self, yaml_file: str):
+    def __init__(self,trial, args: HpoArgs, yaml_file: Path, work_dir: WorkDir):
         self.yaml_file = yaml_file
+        
+        self.params = self.set_optuna_vars(trial, args, work_dir)
 
     def get_params(self):
         with open(self.yaml_file, "r") as f:
@@ -15,7 +19,7 @@ class OptunaParams:
     def get_params(self):
         return self.params
 
-    def set_optuna_vars(trial, args, data_path, yaml_file):
+    def set_optuna_vars(self, trial, args, work_dir: WorkDir):
         """Sets the optuna variables for the trial into a dictionary.
         The dictionary is then used as arguments for the run_main.py script.
         The values are pulled from the optuna_vars.yaml (or given) 
@@ -110,3 +114,4 @@ class OptunaParams:
         print("\n\n--------------------------------")
 
         return params
+

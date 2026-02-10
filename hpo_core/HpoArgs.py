@@ -13,8 +13,12 @@ class HpoArgs:
     
 
     def __init__(self):
-        self.args = self.get_parser()
-        
+        self._args = self.get_parser()
+
+    @property
+    def args(self):
+        return self._args
+
     def get_parser(self):
         parser = argparse.ArgumentParser()
         parser.add_argument('--gpu', type=str, default='1', help='If not GPU 1, changes OPTUNA_STORAGE_PATH.')
@@ -36,10 +40,3 @@ class HpoArgs:
         parser.add_argument('--model_id_name', type=str, default=None, help='Name to use for the model id, trail number is added to the end. Default is set by a series of parameters.')
         parser.add_argument('--volatility', action='store_true', help='If True, uses the volatility target.')
         return parser.parse_args()
-
-    @property
-    def args(self):
-        return self.args
-
-    
-  

@@ -161,103 +161,6 @@ def create_train_cmd(trial_dict, model_id, data_path):
     ]
     return cmd
 
-def set_optuna_vars(trial, data_path, yaml_file):
-    """Sets the optuna variables for the trial into a dictionary.
-    The dictionary is then used as arguments for the run_main.py script.
-    The values are pulled from the optuna_vars.yaml (or given) 
-    file.
-
-    Args:
-        trial: Optuna trial object
-        data_path: Path to the data
-        args: Arguments
-
-    Returns:
-        params: Dictionary of trial parameters
-    """
-
-    with open(Path("config") / ARGS["yaml_file"], "r") as f:
-        config = yaml.safe_load(f)
-
-    params = {}
-
-    # Categorical parameters
-    for name, values in config.get("categorical", {}).items():
-        # If there is only one value, use it twice
-        # This is because Optuna requires two values for categorical parameters
-        if len(values) == 1:
-            params[name] = trial.suggest_categorical(name, values * 2)
-            
-        else:
-            params[name] = trial.suggest_categorical(name, values)
-
-    # Int parameters
-    for name, cfg in config.get("int", {}).items():
-        # If step is provided, use it to suggest the int parameter
-        if "step" in cfg:
-            params[name] = trial.suggest_int(
-            name,
-            int(cfg["low"]),
-            int(cfg["high"]),
-            step=int(cfg.get("step", 1))
-        )
-        else:
-            params[name] = trial.suggest_int(
-                name,
-                int(cfg["low"]),
-                int(cfg["high"])
-            )
-
-    # Float parameters
-    for name, cfg in config.get("float", {}).items():
-        # If step is provided, use it to suggest the float parameter
-        if "step" in cfg:
-            params[name] = trial.suggest_float(
-                name,
-                float(cfg["low"]),
-                float(cfg["high"]),
-                step=float(cfg.get("step", 1))
-            )
-        else:
-            # If step is not provided, use the log flag to suggest the float parameter
-            params[name] = trial.suggest_float(
-                name,
-                float(cfg["low"]),
-                float(cfg["high"]),
-                log=cfg.get("log", False)
-            )
-
-    for name, cfg in config.get("log_float", {}).items():
-        params[name] = trial.suggest_float(
-            name,
-            float(cfg["low"]),
-            float(cfg["high"])
-            )
-
-
-    params["target"] = "returns" if ARGS["returns"] else "close"
-    params['target'] = "volatility" if ARGS["volatility"] else params["target"]
-    params["metric"] = "MSE"
-    #params["dates"] = f"{ARGS["start"]}_{ARGS["end"]}"
-    params["experiment_name"] = ARGS["experiment_name"] or llm_model
-
-    #trial.set_user_attr("dates", f"{ARGS["start"]}_{ARGS["end"]}")
-    trial.set_user_attr("granularity", ARGS["granularity"])
-    trial.set_user_attr("aggregate", ARGS["aggregate"])
-    trial.set_user_attr("target", params["target"])
-    trial.set_user_attr("data_type", "returns" if ARGS["returns"] else "ohlcv")
-    trial.set_user_attr("metric", "MSE")
-    
-    print("--------------------------------\n")
-    print("Trial Parameters:")
-    for key, value in params.items():
-        print(f"{key}: {value}", end=" | ")
-    
-    print("\n\n--------------------------------")
-
-    return params
-
-
 def run_pipeline(run, mlflow_client, model_id, llm_model, ARGS, trial_dict, experiment_name):
     """
     Runs the pipeline for the model if the inference path is provided.
@@ -380,7 +283,7 @@ def run_pipeline(run, mlflow_client, model_id, llm_model, ARGS, trial_dict, expe
 
 # --- 1. Define the Objective Function ---
 # This function defines a single experiment run. Optuna will call it multiple times.
-def objective(trial):
+def objective(trial, args: HpoArgs, data_manager: DataManager, work_dir: WorkDir):
     """
     Defines one trial in the Optuna study.
     Optuna will suggest hyperparameter values, which we use to launch run_main.py.
@@ -397,35 +300,22 @@ def objective(trial):
     """
 
     # Sets the optuna variables
-    trial_dict = set_optuna_vars(trial, ARGS["data_path"], ARGS)
+    trial_dict = set_optuna_vars(trial, args.data_path, args.yaml_file)
 
     # Saves the original data to the DATA_PATH and INF_PATH
     # This is done to avoid using data from previous trials
-    org_data_path = Path("temp") / "org_data.csv"
-    pd.read_csv(org_data_path).to_csv(DATA_PATH, index=False)
-    if INFERENCE:
-        # Saves the original inference data to the INF_PATH
-        org_inf_path = Path("temp") / "org_inf_data.csv"
-        pd.read_csv(org_inf_path).to_csv(INF_PATH, index=False)  
-
-    # Checks if the returns flag is set
-    if ARGS["returns"]:
-        train_path = convert_to_returns(DATA_PATH)
-
-        if INFERENCE:
-            convert_to_returns(INF_PATH)
-    else:
-        train_path = DATA_PATH
+    org_data_path = work_dir.ohlcv_train_data_path()
+    train_path = work_dir.ret_train_data_path()
 
     
     # --- Dynamic/Conditional Parameters ---
     # Generate a unique model_id for each trial
     trial_id = str(uuid.uuid4())[:8]
-    if ARGS["model_id_name"] is not None and ARGS["model_id_name"] != "None":
-        print(f"Using provided model id name: {ARGS['model_id_name']}")
-        model_id = ARGS["model_id_name"] + f"_trial_{trial_id}"
+    if args.model_id_name is not None and args.model_id_name != "None":
+        print(f"Using provided model id name: {args.model_id_name}")
+        model_id = args.model_id_name + f"_trial_{trial_id}"
     else:
-        model_id = f"trial_{trial_id}_{ARGS['granularity']}_{ARGS['data_path'] if ARGS['data_path'] is not None else 'full'}_dates_{ARGS['start']}_{ARGS['end']}_features_{trial_dict['features']}_seq_{trial_dict['seq_len']}"
+        model_id = f"trial_{trial_id}_{args.granularity}_{args.data_path if args.data_path is not None else 'full'}_dates_{args.start}_{args.end}_features_{trial_dict['features']}_seq_{trial_dict['seq_len']}"
 
     # Set the experiment name
     experiment_name = trial_dict['experiment_name']
@@ -515,30 +405,24 @@ def main(args: HpoArgs):
     WorkDir.create_work_dir()
 
 
-    if ARGS["gpu"] != '1': # If the GPU is not 1, uses the NFS server for the storage path
+    if args.gpu != '1': # If the GPU is not 1, uses the NFS server for the storage path
         OPTUNA_STORAGE_PATH = f"sqlite:////mnt/nfs/mlflow/optuna_study.db"
         #** DATASET_PATH = Path("/mnt/nfs/datasets/")
         #** ignored while the /mnt nfs is not mounted
 
 
-    INFERENCE = ARGS['inf_start'] is not None or ARGS['inf_end'] is not None
+    INFERENCE = args.inf_start is not None or args.inf_end is not None
     
 
     print(f"Prepping Data...")
-    data_manager = DataManager(granularity = ARGS["granularity"], 
-                               start_date = ARGS["start"], 
-                               end_date = ARGS["end"], 
-                               inf_start_date = ARGS["inf_start"], 
-                               inf_end_date = ARGS["inf_end"], 
-                               aggregate = ARGS["aggregate"], 
-                               custom_dataset_path = ARGS["data_path"])
+    data_manager = DataManager(args)
 
     
 
-    if ARGS["study_name"] == '': # Uses the default study name
+    if args.study_name == '': # Uses the default study name
         study_name = f"{llm_model.lower()}_study"
     else: # Uses the given study name
-        study_name = f"{ARGS['study_name']}"
+        study_name = f"{args.study_name}"
 
     print(f"Study name: {study_name}")
 
@@ -552,7 +436,7 @@ def main(args: HpoArgs):
     print(f"Data is Prepped... Starting HPO...")
     # 'n_trials' is the total number of experiments you want to run.
     # Optuna will intelligently choose the parameters for these runs.
-    study.optimize(objective, n_trials=ARGS["trials"])
+    study.optimize(objective, n_trials=args.trials)
 
     # --- 6. Print the Results ---
     print("\n--- Hyperparameter Optimization Finished ---")

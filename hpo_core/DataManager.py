@@ -63,6 +63,8 @@ class DataManager:
         self.inf_start_date = datetime.strptime(args.inf_start, '%Y-%m-%d').timestamp()
         self.inf_end_date = datetime.strptime(args.inf_end, '%Y-%m-%d').timestamp()
 
+        self.aggregate = args.aggregate
+
         self.returns = args.returns
 
         if args.data_path is not None:
@@ -70,8 +72,7 @@ class DataManager:
             print(f"Using provided dataset: {self.data_path}")
             self.full_data = pd.read_csv(self.data_path)
         else:
-            suffix = self.granularity_map[self.granularity.lower()]
-            self.data_path = self.DATASET_PATH / f"candlesticks-{suffix}.csv"
+            self.data_path = WorkDir.get_full_data_path(self.granularity)
             self.full_data = pd.read_csv(self.data_path)
 
         self.first_time = datetime.fromtimestamp(int(self.full_data.iloc[0]['timestamp'])).timestamp()
@@ -83,11 +84,11 @@ class DataManager:
         self.prepare_data()
 
         if self.returns:
-            convert_to_returns(self.data_path)
-            self.data_path = WorkDir.ret_train_data_path()
+            self.ret_data = convert_to_returns(WorkDir.ohlcv_train_data_path())
+            WorkDir.write_ret_train_data(self.ret_data)
             if self.INFERENCE:
-                self.inf_data_path = WorkDir.ret_inf_data_path()
-                convert_to_returns(self.inf_data_path)
+                self.ret_inf_data = convert_to_returns(WorkDir.org_ohlcv_inf_data_path())
+                WorkDir.write_ret_inf_data(self.ret_inf_data)
 
 
     def prepare_data(self):
@@ -103,9 +104,9 @@ class DataManager:
         if self.INFERENCE:
             self.inf_data = self.aggregate_data(self.inf_data, self.aggregate)
 
-        WorkDir.write_org_train_data(self.data)
+        WorkDir.write_ohlcv_train_data(self.data)
         if self.INFERENCE:
-            WorkDir.write_org_inf_data(self.inf_data)
+            WorkDir.write_org_ohlcv_inf_data(self.inf_data)
   
     def check_date_validity(self):
         """
@@ -221,9 +222,8 @@ def convert_to_returns(data_path, keep_high_low=False, keep_volume=True, log_ret
 
     final_data["timestamp"] = data["timestamp"]
 
-    final_data.to_csv(data_path, index=False)
+    return final_data
 
-    return data_path
 
 
 def convert_back_to_candlesticks(num_predictions: int, custom_save_path = None):
