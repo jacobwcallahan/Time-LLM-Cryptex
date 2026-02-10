@@ -52,7 +52,8 @@ class DataManager:
     """
 
     
-    def __init__(self, args: HpoArgs):
+    def __init__(self, args: HpoArgs, work_dir: WorkDir | None = None):
+        self.work_dir = work_dir if work_dir is not None else WorkDir()
 
         self.INFERENCE = args.inf_start is not None or args.inf_end is not None
 
@@ -67,13 +68,7 @@ class DataManager:
 
         self.returns = args.returns
 
-        if args.data_path is not None:
-            self.data_path = Path(args.data_path)
-            print(f"Using provided dataset: {self.data_path}")
-            self.full_data = pd.read_csv(self.data_path)
-        else:
-            self.data_path = WorkDir.get_full_data_path(self.granularity)
-            self.full_data = pd.read_csv(self.data_path)
+        self.full_data = work_dir.get_full_data_df()
 
         self.first_time = datetime.fromtimestamp(int(self.full_data.iloc[0]['timestamp'])).timestamp()
         self.last_time = datetime.fromtimestamp(int(self.full_data.iloc[-1]['timestamp'])).timestamp()
@@ -84,11 +79,11 @@ class DataManager:
         self.prepare_data()
 
         if self.returns:
-            self.ret_data = convert_to_returns(WorkDir.ohlcv_train_data_path())
-            WorkDir.write_ret_train_data(self.ret_data)
+            self.ret_data = convert_to_returns(self.work_dir.ohlcv_train_data_path())
+            self.work_dir.write_ret_train_data(self.ret_data)
             if self.INFERENCE:
-                self.ret_inf_data = convert_to_returns(WorkDir.org_ohlcv_inf_data_path())
-                WorkDir.write_ret_inf_data(self.ret_inf_data)
+                self.ret_inf_data = convert_to_returns(self.work_dir.org_ohlcv_inf_data_path())
+                self.work_dir.write_ret_inf_data(self.ret_inf_data)
 
 
     def prepare_data(self):
@@ -104,9 +99,9 @@ class DataManager:
         if self.INFERENCE:
             self.inf_data = self.aggregate_data(self.inf_data, self.aggregate)
 
-        WorkDir.write_ohlcv_train_data(self.data)
+        self.work_dir.write_ohlcv_train_data(self.data)
         if self.INFERENCE:
-            WorkDir.write_org_ohlcv_inf_data(self.inf_data)
+            self.work_dir.write_org_ohlcv_inf_data(self.inf_data)
   
     def check_date_validity(self):
         """
@@ -226,18 +221,19 @@ def convert_to_returns(data_path, keep_high_low=False, keep_volume=True, log_ret
 
 
 
-def convert_back_to_candlesticks(num_predictions: int, custom_save_path = None):
+def convert_back_to_candlesticks(num_predictions: int, custom_save_path=None, work_dir: WorkDir | None = None):
     """
     Convert inferenced returns data back to candlesticks. This is used to backtest the model.
     Writes the inferenced data to the inferenced data path.
 
     args:
-        original_data_path: path to the original candlestick data  to be inferenced
-        inf_data_path: path to save the inferenced data
         num_predictions: number of predictions to convert back to candlesticks
+        custom_save_path: optional path to save the result
+        work_dir: WorkDir instance for paths; uses default if None
     """
-    org_inf_data_path = WorkDir.org_ohlcv_inf_data_path()
-    inf_data_path = WorkDir.inferenced_path()
+    wd = work_dir if work_dir is not None else WorkDir()
+    org_inf_data_path = wd.org_ohlcv_inf_data_path()
+    inf_data_path = wd.inferenced_path()
 
     if not os.path.exists(Path(inf_data_path)):
         raise ValueError(f"Inference data path {inf_data_path} does not exist.")

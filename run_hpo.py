@@ -300,12 +300,8 @@ def objective(trial, args: HpoArgs, data_manager: DataManager, work_dir: WorkDir
     """
 
     # Sets the optuna variables
-    trial_dict = set_optuna_vars(trial, args.data_path, args.yaml_file)
-
-    # Saves the original data to the DATA_PATH and INF_PATH
-    # This is done to avoid using data from previous trials
-    org_data_path = work_dir.ohlcv_train_data_path()
-    train_path = work_dir.ret_train_data_path()
+    optuna_params = OptunaParams(trial, args, args.yaml_file, work_dir)
+    trial_dict = optuna_params.get_params()
 
     
     # --- Dynamic/Conditional Parameters ---
@@ -334,7 +330,7 @@ def objective(trial, args: HpoArgs, data_manager: DataManager, work_dir: WorkDir
             warnings.warn("Backtest flag is set but no inference date is provided. - Will not perform backtest.")
 
         # Creates the command to train the model
-        cmd = create_train_cmd(trial_dict, model_id, train_path)
+        cmd = create_train_cmd(trial_dict, model_id, work_dir.train_data_path())
         print(f"\n--- Starting Trial {trial.number} ---\n{' '.join(cmd)}\n")
 
         # Launch the subprocess
@@ -402,8 +398,8 @@ def main(args: HpoArgs):
     # The 'study_name' will group your runs. If you restart the script, it will resume.
     # 'storage' tells Optuna to save results to a local SQLite database.
 
-    WorkDir.create_work_dir()
-
+    work_dir = WorkDir(args)
+    work_dir.create_work_dir()
 
     if args.gpu != '1': # If the GPU is not 1, uses the NFS server for the storage path
         OPTUNA_STORAGE_PATH = f"sqlite:////mnt/nfs/mlflow/optuna_study.db"
@@ -415,8 +411,7 @@ def main(args: HpoArgs):
     
 
     print(f"Prepping Data...")
-    data_manager = DataManager(args)
-
+    data_manager = DataManager(args, work_dir=work_dir)
     
 
     if args.study_name == '': # Uses the default study name
@@ -436,7 +431,10 @@ def main(args: HpoArgs):
     print(f"Data is Prepped... Starting HPO...")
     # 'n_trials' is the total number of experiments you want to run.
     # Optuna will intelligently choose the parameters for these runs.
-    study.optimize(objective, n_trials=args.trials)
+    study.optimize(
+        lambda trial: objective(trial, args, data_manager, work_dir),
+        n_trials=args.trials,
+    )
 
     # --- 6. Print the Results ---
     print("\n--- Hyperparameter Optimization Finished ---")
