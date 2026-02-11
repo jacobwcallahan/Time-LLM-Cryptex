@@ -52,12 +52,10 @@ class DataManager:
     """
 
     
-    def __init__(self, args: HpoArgs, work_dir: WorkDir | None = None):
-        self.work_dir = work_dir if work_dir is not None else WorkDir()
+    def __init__(self, args: HpoArgs, work_dir: WorkDir):
+        self.args = args
+        self.work_dir = work_dir
 
-        self.INFERENCE = args.inf_start is not None or args.inf_end is not None
-
-        self.granularity = args.granularity
         self.start_date = datetime.strptime(args.start, '%Y-%m-%d').timestamp()
         self.end_date = datetime.strptime(args.end, '%Y-%m-%d').timestamp()
 
@@ -66,7 +64,7 @@ class DataManager:
 
         self.aggregate = args.aggregate
 
-        self.returns = args.returns
+        self.args.returns = args.returns
 
         self.full_data = work_dir.get_full_data_df()
 
@@ -93,30 +91,31 @@ class DataManager:
         self.data = self.full_data[(self.full_data['timestamp'] >= self.start_date) & (self.full_data['timestamp'] <= self.end_date)]
 
 
-        if self.INFERENCE:
+        if self.args.INFERENCE:
             self.inf_data = self.data[(self.data['timestamp'] >= self.inf_start_date) & (self.data['timestamp'] <= self.inf_end_date)]
 
         self.data = self.aggregate_data(self.data, self.aggregate)
-        if self.INFERENCE:
+        if self.args.INFERENCE:
             self.inf_data = self.aggregate_data(self.inf_data, self.aggregate)
 
         # Write the OHLCV train data to the work directory
         self.work_dir.write_ohlcv_train_data(self.data)
-        if self.INFERENCE:
+        if self.args.INFERENCE:
             self.work_dir.write_org_ohlcv_inf_data(self.inf_data)
 
         # If the data is returns, convert it to returns and save it
-        if self.returns:
+        if self.args.returns:
             self.data = self.convert_to_returns(self.work_dir.ohlcv_train_data_path())
-            if self.INFERENCE:
+            if self.args.INFERENCE:
                 self.inf_data = self.convert_to_returns(self.work_dir.org_ohlcv_inf_data_path())
-                self.work_dir.write_ret_inf_data(self.inf_data)
         
         print("--------------------------------")
         print(self.data.head())
         print(len(self.data))
         print("--------------------------------")
         self.work_dir.write_train_data(self.data)
+        if self.args.INFERENCE:
+            self.work_dir.write_inf_data(self.inf_data)
 
             
     def check_date_validity(self):
@@ -141,7 +140,7 @@ class DataManager:
                 warnings.warn(f"The start date given ({self.start_date}) is after the end date given ({self.end_date}). Using the last date of the dataset: {datetime.fromtimestamp(self.last_time).date()} as the end date.\n")
                 self.end_date = self.last_time
 
-        if self.INFERENCE:
+        if self.args.INFERENCE:
             if self.inf_start_date is not None and self.inf_end_date is not None:
                 if self.inf_start_date > self.inf_end_date:
                     warnings.warn(f"The inference start date given ({self.inf_start_date}) is after the inference end date given ({self.inf_end_date}). Using the last date of the dataset: {datetime.fromtimestamp(self.last_time).date()} as the inference end date.\n")
@@ -293,10 +292,10 @@ class DataManager:
         if not os.path.exists(self.work_dir.train_data_path()):
             raise ValueError(f"Train data path {self.work_dir.train_data_path()} does not exist.")
         
-        if self.INFERENCE:
+        if self.args.INFERENCE:
             if not os.path.exists(self.work_dir.org_ohlcv_inf_data_path()):
                 raise ValueError(f"Original inference data path {self.work_dir.org_ohlcv_inf_data_path()} does not exist.")
-            if self.returns:
+            if self.args.returns:
                 if not os.path.exists(self.work_dir.ret_inf_data_path()):
                     raise ValueError(f"Returns inference data path {self.work_dir.ret_inf_data_path()} does not exist.")
         return True
