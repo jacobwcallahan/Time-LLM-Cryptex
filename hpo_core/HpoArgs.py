@@ -27,7 +27,7 @@ class HpoArgs:
         for key, value in overrides.items():
             setattr(self._args, key, value) 
         self.INFERENCE = (
-            self._args.inf_start is not None and self._args.inf_end is not None
+            self._args.inf_start is not None or self._args.inf_end is not None
         )
         setattr(self._args, "INFERENCE", self.INFERENCE)
 
@@ -50,7 +50,8 @@ class HpoArgs:
         """The underlying argparse Namespace (for backward compatibility)."""
         return self._args
 
-    def _build_parser():
+
+    def _build_parser(self):
         parser = argparse.ArgumentParser()
         parser.add_argument('--gpu', type=str, default='1', help='If not GPU 1, changes OPTUNA_STORAGE_PATH.')
         parser.add_argument('--study_name', type=str, default='', help='If not empty, uses the study name. Model name is added to the beginning of the study name.')
