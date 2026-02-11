@@ -1,10 +1,10 @@
 import argparse
+import os
+import pickle
 import torch
 import pandas as pd
 import numpy as np
 import mlflow
-import os
-import pickle
 from types import SimpleNamespace
 from tqdm import tqdm
 from models import TimeLLM
@@ -64,19 +64,24 @@ def load_mlflow_artifacts_and_args(model_id, llm_model, experiment_name = None, 
     args.llm_model = llm_model
     return args, model_state_path, run_id
 
-def main():
-    cli_args = parse_args()
+def main(args):
     # Load config, model, and MLflow run ID
-
+    cli_overrides = {
+        'data_path': getattr(args, 'data_path', None),
+        'save_path': getattr(args, 'save_path', None),
+        'experiment_name': getattr(args, 'experiment_name', None),
+    }
     args, model_state_path, run_id = load_mlflow_artifacts_and_args(
-        cli_args.model_id, cli_args.llm_model, experiment_name = cli_args.experiment_name, tracking_uri = cli_args.mlflow_tracking_uri)
-
+        args.model_id, args.llm_model, experiment_name=cli_overrides['experiment_name'], tracking_uri=args.mlflow_tracking_uri)
+    for k, v in cli_overrides.items():
+        if v is not None:
+            setattr(args, k, v)
 
     # Allow CLI override for data_path
-    if cli_args.data_path: 
-        args.data_path = cli_args.data_path
+    if args.data_path: 
+        args.data_path = args.data_path
         # When data_path is overridden via CLI, use it directly without prepending root_path
-        data_file_path = cli_args.data_path
+        data_file_path = args.data_path
     else:
         # Use the original root_path + data_path combination for non-overridden cases
         data_file_path = os.path.join(args.root_path, args.data_path)
@@ -129,6 +134,12 @@ def main():
         results.append(row_dict)
 
     # For the first seq_len rows, fill with NaN predictions (not enough history)
+    if num_rows < seq_len:
+        raise ValueError(
+            f"Inference data has {num_rows} rows but model requires seq_len={seq_len}. "
+            f"Insufficient history for inference."
+        )
+        
     for i in range(seq_len):
         row_dict = {col: df_raw.iloc[i][col] for col in df_raw.columns}
         for j in range(pred_len):
@@ -142,9 +153,10 @@ def main():
         csv_path = os.path.join(tmpdir, 'inference.csv')
         result_df.to_csv(csv_path, index=False)
         
-        if cli_args.save_path:
-            os.makedirs(cli_args.save_path, exist_ok=True)
-            result_df.to_csv(cli_args.save_path + '/inference.csv', index=False)
+        if args.save_path:
+            save_path = str(args.save_path)
+            os.makedirs(save_path, exist_ok=True)
+            result_df.to_csv(os.path.join(save_path, 'inference.csv'), index=False)
 
         # Log to MLflow
         with mlflow.start_run(run_id=run_id):
@@ -153,4 +165,5 @@ def main():
             print(f"Logged inference results as 'inference.csv' to MLflow run {run_id}.")
 
 if __name__ == '__main__':
-    main() 
+    args = parse_args()
+    main(args) 
