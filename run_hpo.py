@@ -27,24 +27,17 @@ Arguments:
     --yaml_file: YAML file to use for the study. Default is optuna_vars.yaml. Contained in ./config/
 """
 
-from logging import warning
-from turtle import end_fill
-from typing import Any
 import optuna
 import pandas as pd
 import subprocess
-import sys
 import mlflow
 import uuid
 import time
 import os
-import argparse
-from datetime import datetime
-from dateutil.parser import parse
 
 import yaml
 from pathlib import Path
-from utils.pipeline import run_inference, perform_backtest, convert_to_returns, aggregate_data, get_mse_vals, get_mda_vals, get_mae_vals
+from utils.pipeline import run_inference, perform_backtest, get_mse_vals, get_mda_vals, get_mae_vals
 import warnings
 import shutil
 
@@ -300,8 +293,16 @@ def objective(trial, args: HpoArgs, data_manager: DataManager, work_dir: WorkDir
     """
 
     # Sets the optuna variables
-    optuna_params = OptunaParams(trial, args, args.yaml_file, work_dir)
-    trial_dict = optuna_params.get_params()
+    try:
+        optuna_params = OptunaParams(trial, args, args.yaml_file, work_dir)
+        trial_dict = optuna_params.get_params()
+    except ValueError as e:
+        if "CategoricalDistribution does not support dynamic value space." in str(e):
+            print(f"Error: {e}")
+            print("Have you run new parameters for the same Optuna trial? \n\nEvery Optuna trial requires the same set of parameters\n")
+        else:
+            print(f"{e}")
+        raise exit(1)
 
     
     # --- Dynamic/Conditional Parameters ---

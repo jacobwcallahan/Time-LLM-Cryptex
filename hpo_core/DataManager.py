@@ -78,12 +78,12 @@ class DataManager:
         self.check_date_validity()
         self.prepare_data()
 
-        if self.returns:
-            self.ret_data = convert_to_returns(self.work_dir.ohlcv_train_data_path())
-            self.work_dir.write_ret_train_data(self.ret_data)
-            if self.INFERENCE:
-                self.ret_inf_data = convert_to_returns(self.work_dir.org_ohlcv_inf_data_path())
-                self.work_dir.write_ret_inf_data(self.ret_inf_data)
+        self.check_data_paths()
+        print("--------------------------------")
+        print(datetime.fromtimestamp(self.first_time).date(), datetime.fromtimestamp(self.last_time).date())
+        print(datetime.fromtimestamp(self.start_date).date(), datetime.fromtimestamp(self.end_date).date())
+        print("--------------------------------")
+
 
 
     def prepare_data(self):
@@ -92,6 +92,7 @@ class DataManager:
         """
         self.data = self.full_data[(self.full_data['timestamp'] >= self.start_date) & (self.full_data['timestamp'] <= self.end_date)]
 
+
         if self.INFERENCE:
             self.inf_data = self.data[(self.data['timestamp'] >= self.inf_start_date) & (self.data['timestamp'] <= self.inf_end_date)]
 
@@ -99,10 +100,25 @@ class DataManager:
         if self.INFERENCE:
             self.inf_data = self.aggregate_data(self.inf_data, self.aggregate)
 
+        # Write the OHLCV train data to the work directory
         self.work_dir.write_ohlcv_train_data(self.data)
         if self.INFERENCE:
             self.work_dir.write_org_ohlcv_inf_data(self.inf_data)
-  
+
+        # If the data is returns, convert it to returns and save it
+        if self.returns:
+            self.data = self.convert_to_returns(self.work_dir.ohlcv_train_data_path())
+            if self.INFERENCE:
+                self.inf_data = self.convert_to_returns(self.work_dir.org_ohlcv_inf_data_path())
+                self.work_dir.write_ret_inf_data(self.inf_data)
+        
+        print("--------------------------------")
+        print(self.data.head())
+        print(len(self.data))
+        print("--------------------------------")
+        self.work_dir.write_train_data(self.data)
+
+            
     def check_date_validity(self):
         """
         Checks the validity of the start and end dates.
@@ -173,101 +189,114 @@ class DataManager:
 
         return out
 
-def convert_to_returns(data_path, keep_high_low=False, keep_volume=True, log_returns=False):
-    """
-    Convert data to returns.
+    def convert_to_returns(self, data_path, keep_high_low=False, keep_volume=True, log_returns=False):
+        """
+        Convert data to returns.
 
-    args:
-        data_path: path to the data
-        log_returns: bool, if True, the data is converted to log returns
-        keep_high_low: bool, if True, the high and low prices are kept
-        keep_volume: bool, if True, the volume column is kept
-    returns:
-        Path to the returns data file (data_path)
-    """
-    # Checks if the data path is a file or a directory and saves the output path accordingly
+        args:
+            data_path: path to the data
+            log_returns: bool, if True, the data is converted to log returns
+            keep_high_low: bool, if True, the high and low prices are kept
+            keep_volume: bool, if True, the volume column is kept
+        returns:
+            Path to the returns data file (data_path)
+        """
+        # Checks if the data path is a file or a directory and saves the output path accordingly
 
-    try:
-        data = pd.read_csv(data_path)
-    except:
-        raise ValueError(f"Data path {data_path} is not a valid file.")
-    try:
-        data = pd.DataFrame({"close": data["close"], "volume": data["volume"], "timestamp": data["timestamp"]})
-    except:
-        print("-------------ERROR-------------------")
-        print(data.head())
-        print("-------------ERROR-------------------")
-        raise ValueError(f"Data path {data_path} is not a valid file.")
-    if log_returns:
-        data["returns"] = np.log(data["close"] / data["close"].shift(1))
-    else:
-        data["returns"] = data["close"] / data["close"].shift(1) - 1
-    
-    data = data.dropna().reset_index(drop=True)
-
-    final_data = pd.DataFrame()
-    final_data['returns'] = data['returns']
-
-    if keep_high_low:
-        final_data["high"] = data["high"]
-        final_data["low"] = data["low"]
-
-    if keep_volume:
-        final_data["volume"] = data["volume"]
-
-    final_data["timestamp"] = data["timestamp"]
-
-    return final_data
-
-
-
-def convert_back_to_candlesticks(num_predictions: int, custom_save_path=None, work_dir: WorkDir | None = None):
-    """
-    Convert inferenced returns data back to candlesticks. This is used to backtest the model.
-    Writes the inferenced data to the inferenced data path.
-
-    args:
-        num_predictions: number of predictions to convert back to candlesticks
-        custom_save_path: optional path to save the result
-        work_dir: WorkDir instance for paths; uses default if None
-    """
-    wd = work_dir if work_dir is not None else WorkDir()
-    org_inf_data_path = wd.org_ohlcv_inf_data_path()
-    inf_data_path = wd.inferenced_path()
-
-    if not os.path.exists(Path(inf_data_path)):
-        raise ValueError(f"Inference data path {inf_data_path} does not exist.")
-
-    if not os.path.exists(org_inf_data_path):
-        raise ValueError(f"Original data path {org_inf_data_path} does not exist.")
-
-    result = pd.read_csv(org_inf_data_path)
-    predicted_returns = pd.read_csv(inf_data_path)
-
-    # Get the last known close price before predictions start
-    try:
-        last_close = result.loc[result.index[predicted_returns['returns_predicted_1'].first_valid_index()-1], 'close']
-    except Exception as e:
-        print(f"Error getting last close price: {e}\n")
-        raise ValueError(f"Error getting last close price: {e}")
-
-    for i in range(1, num_predictions+1):  
-        col = f'returns_predicted_{i}'
-        if col in predicted_returns.columns:
-            # Calculate cumulative returns 
-            pred_close = last_close * (1 + predicted_returns[col])
-            # Rename column
-            result[f'close_predicted_{i}'] = pred_close
-
-    # Convert unix timestamp to UTC datetime
-    result["timestamp"] = pd.to_datetime(result["timestamp"], unit='s', utc=True)
-
-    if custom_save_path is None:
-        result.to_csv(inf_data_path, index=False)
-    else:
-        result.to_csv(custom_save_path, index=False)
-    print(f"Predicted candlesticks saved to {custom_save_path if custom_save_path is not None else inf_data_path}")
-
-    return custom_save_path if custom_save_path is not None else inf_data_path
-
+        try:
+            data = pd.read_csv(data_path)
+        except:
+            raise ValueError(f"Data path {data_path} is not a valid file.")
+        try:
+            data = pd.DataFrame({"close": data["close"], "volume": data["volume"], "timestamp": data["timestamp"]})
+        except:
+            print("-------------ERROR-------------------")
+            print(data.head())
+            print("-------------ERROR-------------------")
+            raise ValueError(f"Data path {data_path} is not a valid file.")
+        if log_returns:
+            data["returns"] = np.log(data["close"] / data["close"].shift(1))
+        else:
+            data["returns"] = data["close"] / data["close"].shift(1) - 1
         
+        data = data.dropna().reset_index(drop=True)
+
+        final_data = pd.DataFrame()
+        final_data['returns'] = data['returns']
+
+        if keep_high_low:
+            final_data["high"] = data["high"]
+            final_data["low"] = data["low"]
+
+        if keep_volume:
+            final_data["volume"] = data["volume"]
+
+        final_data["timestamp"] = data["timestamp"]
+
+        return final_data
+
+
+
+    def convert_back_to_candlesticks(num_predictions: int, custom_save_path=None, work_dir: WorkDir | None = None):
+        """
+        Convert inferenced returns data back to candlesticks. This is used to backtest the model.
+        Writes the inferenced data to the inferenced data path.
+
+        args:
+            num_predictions: number of predictions to convert back to candlesticks
+            custom_save_path: optional path to save the result
+            work_dir: WorkDir instance for paths; uses default if None
+        """
+        wd = work_dir if work_dir is not None else WorkDir()
+        org_inf_data_path = wd.org_ohlcv_inf_data_path()
+        inf_data_path = wd.inferenced_path()
+
+        if not os.path.exists(Path(inf_data_path)):
+            raise ValueError(f"Inference data path {inf_data_path} does not exist.")
+
+        if not os.path.exists(org_inf_data_path):
+            raise ValueError(f"Original data path {org_inf_data_path} does not exist.")
+
+        result = pd.read_csv(org_inf_data_path)
+        predicted_returns = pd.read_csv(inf_data_path)
+
+        # Get the last known close price before predictions start
+        try:
+            last_close = result.loc[result.index[predicted_returns['returns_predicted_1'].first_valid_index()-1], 'close']
+        except Exception as e:
+            print(f"Error getting last close price: {e}\n")
+            raise ValueError(f"Error getting last close price: {e}")
+
+        for i in range(1, num_predictions+1):  
+            col = f'returns_predicted_{i}'
+            if col in predicted_returns.columns:
+                # Calculate cumulative returns 
+                pred_close = last_close * (1 + predicted_returns[col])
+                # Rename column
+                result[f'close_predicted_{i}'] = pred_close
+
+        # Convert unix timestamp to UTC datetime
+        result["timestamp"] = pd.to_datetime(result["timestamp"], unit='s', utc=True)
+
+        if custom_save_path is None:
+            result.to_csv(inf_data_path, index=False)
+        else:
+            result.to_csv(custom_save_path, index=False)
+        print(f"Predicted candlesticks saved to {custom_save_path if custom_save_path is not None else inf_data_path}")
+
+        return custom_save_path if custom_save_path is not None else inf_data_path
+
+    def check_data_paths(self) -> bool:
+        if not os.path.exists(self.work_dir.ohlcv_train_data_path()):
+            raise ValueError(f"OHLCV train data path {self.work_dir.ohlcv_train_data_path()} does not exist.")
+
+        if not os.path.exists(self.work_dir.train_data_path()):
+            raise ValueError(f"Train data path {self.work_dir.train_data_path()} does not exist.")
+        
+        if self.INFERENCE:
+            if not os.path.exists(self.work_dir.org_ohlcv_inf_data_path()):
+                raise ValueError(f"Original inference data path {self.work_dir.org_ohlcv_inf_data_path()} does not exist.")
+            if self.returns:
+                if not os.path.exists(self.work_dir.ret_inf_data_path()):
+                    raise ValueError(f"Returns inference data path {self.work_dir.ret_inf_data_path()} does not exist.")
+        return True

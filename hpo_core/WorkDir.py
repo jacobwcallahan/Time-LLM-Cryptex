@@ -63,15 +63,8 @@ class WorkDir:
         self.create_work_dir()
         data.to_csv(self.org_ohlcv_inf_data_path(), index=False)
 
-    def ret_train_data_path(self) -> Path:
-        return self.work_dir / "ret_train_data.csv"
-
     def ret_inf_data_path(self) -> Path:
         return self.work_dir / "ret_inf_data.csv"
-
-    def write_ret_train_data(self, data: pd.DataFrame):
-        self.create_work_dir()
-        data.to_csv(self.ret_train_data_path(), index=False)
 
     def write_ret_inf_data(self, data: pd.DataFrame):
         self.create_work_dir()
@@ -82,6 +75,7 @@ class WorkDir:
         return self.work_dir / "inference.csv"
 
     def train_data_path(self) -> Path:
+        """Path to the train data. This could be either the OHLCV or the returns data."""
         return self.work_dir / "train_data.csv"
 
     def write_train_data(self, data: pd.DataFrame):
@@ -103,3 +97,13 @@ class WorkDir:
         if self.full_data_path is None:
             self.set_full_data_path()
         return pd.read_csv(self.full_data_path)
+
+    def metrics_path(self, metric: str) -> Path:
+        return self.work_dir / f"{metric}_metrics.csv"
+
+    def write_metrics(self, metric: str, data: pd.DataFrame):
+        data.to_csv(self.metrics_path(metric), index=False)
+
+    def summary_table_path(self) -> Path:
+        return self.work_dir / "summary_table.csv"
+
