@@ -8,7 +8,6 @@ class WorkDir:
     Manages the work directory and dataset paths. Configurable via __init__.
     """
 
-    WORK_DIR = Path("temp")
     DATASET_PATH = Path("dataset/candles/")
     OPTUNA_STORAGE_PATH = "sqlite:////data-fast/nfs/mlflow/optuna_study.db" # Optuna storage path
 
@@ -47,6 +46,9 @@ class WorkDir:
     def create_work_dir(self):
         os.makedirs(self.work_dir, exist_ok=True)
 
+    def get_work_dir_path(self) -> Path:
+        return self.work_dir
+
     def ohlcv_train_data_path(self) -> Path:
         """Path to the original train data sliced by given dates."""
         return self.work_dir / "ohlcv_train_data.csv"
@@ -82,6 +84,33 @@ class WorkDir:
         self.create_work_dir()
         data.to_csv(self.train_data_path(), index=False)
     
+    def inf_data_path(self) -> Path:
+        return self.work_dir / "inf_data.csv"
+
+    def write_inf_data(self, data: pd.DataFrame):
+        self.create_work_dir()
+        data.to_csv(self.inf_data_path(), index=False)
+
+    def get_inferenced_path(self) -> Path:
+        """Path of the data that has already been inferenced."""
+        return self.work_dir / "inference.csv"
+
+    def get_ohlcv_inferenced_path(self) -> Path:
+        """Path of the data that has already been inferenced in OHLCV format."""
+        return self.work_dir / "ohlcv_inference.csv"
+
+    def write_ohlcv_inferenced_data(self, data: pd.DataFrame):
+        self.create_work_dir()
+        data.to_csv(self.get_ohlcv_inferenced_path(), index=False)
+
+    def get_ret_inferenced_path(self) -> Path:
+        """Path of the data that has already been inferenced in returns format."""
+        return self.work_dir / "ret_inference.csv"
+
+    def write_ret_inferenced_data(self, data: pd.DataFrame):
+        self.create_work_dir()
+        data.to_csv(self.get_ret_inferenced_path(), index=False)
+
     def get_full_data_path(self) -> Path:
         if self.full_data_path is None:
             self.set_full_data_path()
@@ -106,4 +135,5 @@ class WorkDir:
 
     def summary_table_path(self) -> Path:
         return self.work_dir / "summary_table.csv"
+    
 
