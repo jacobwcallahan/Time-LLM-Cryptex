@@ -80,7 +80,9 @@ class DataManager:
         print("--------------------------------")
         print(datetime.fromtimestamp(self.first_time).date(), datetime.fromtimestamp(self.last_time).date())
         print(datetime.fromtimestamp(self.start_date).date(), datetime.fromtimestamp(self.end_date).date())
+        print(datetime.fromtimestamp(self.inf_start_date).date(), datetime.fromtimestamp(self.inf_end_date).date())
         print("--------------------------------")
+        print(len(self.inf_data))
 
 
 
@@ -90,9 +92,8 @@ class DataManager:
         """
         self.data = self.full_data[(self.full_data['timestamp'] >= self.start_date) & (self.full_data['timestamp'] <= self.end_date)]
 
-
         if self.args.INFERENCE:
-            self.inf_data = self.data[(self.data['timestamp'] >= self.inf_start_date) & (self.data['timestamp'] <= self.inf_end_date)]
+            self.inf_data = self.full_data[(self.full_data['timestamp'] >= self.inf_start_date) & (self.full_data['timestamp'] <= self.inf_end_date)]
 
         self.data = self.aggregate_data(self.data, self.aggregate)
         if self.args.INFERENCE:
@@ -109,13 +110,8 @@ class DataManager:
             if self.args.INFERENCE:
                 self.inf_data = self.convert_to_returns(self.work_dir.org_ohlcv_inf_data_path())
         
-        print("--------------------------------")
-        print(self.data.head())
-        print(len(self.data))
-        print("--------------------------------")
         self.work_dir.write_train_data(self.data)
-        if self.args.INFERENCE:
-            self.work_dir.write_inf_data(self.inf_data)
+        self.work_dir.write_inf_data(self.inf_data)
 
             
     def check_date_validity(self):
@@ -150,6 +146,17 @@ class DataManager:
                 if self.end_date > self.inf_start_date:
                     warnings.warn(f"The end date given ({self.end_date}) is after the inference start date given ({self.inf_start_date}). Using the end date as the inference start date.\n")
                     self.inf_start_date = self.end_date
+
+            if self.end_date is not None and self.inf_start_date is None:
+                warnings.warn(f"No inference start date provided. Using the end date as the inference start date: {datetime.fromtimestamp(self.end_date).date()}\n")
+                self.inf_start_date = self.end_date
+
+            if self.inf_end_date is not None and self.inf_start_date is None:
+                warnings.warn(f"No inference end date provided. Using the last date of the dataset as the inference end date: {datetime.fromtimestamp(self.last_time).date()}\n")
+                self.inf_end_date = self.last_time
+
+            if self.end_date is None and self.inf_start_date is None:
+                raise ValueError("No start or end date provided for the training data and no start date provided for the inference data.")
 
 
     def aggregate_data(self, data: pd.DataFrame, aggregate: int):
