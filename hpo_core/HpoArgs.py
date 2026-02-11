@@ -1,25 +1,56 @@
 import argparse
 from pathlib import Path
 
+
+
+
 class HpoArgs:
     """
-    This class is responsible for storing the hpo arguments.
+    Stores HPO arguments from CLI and/or programmatic overrides.
+    All attributes are accessible directly: args.gpu, args.start, etc.
     """
 
     llm_model = "LLAMA3.1"
-    OPTUNA_STORAGE_PATH = "sqlite:////data-fast/nfs/mlflow/optuna_study.db" # Optuna storage path
-    DATASET_PATH = Path("./dataset/candles/") # Dataset path for gpu1 (without specific dataset)
+    OPTUNA_STORAGE_PATH = "sqlite:////data-fast/nfs/mlflow/optuna_study.db"
+    DATASET_PATH = Path("./dataset/candles/")
 
-    
+    def __init__(self, parse_cli: bool = True, **overrides):
+        """
+        Args:
+            parse_cli: If True, parse sys.argv. If False, start with defaults (useful for programmatic use).
+            **overrides: Any CLI arg name as keyword. Overrides CLI values. Use for programmatic args.
+        """
+        if parse_cli:
+            self._args = self._build_parser().parse_args()
+        else:
+            self._args = self._build_parser().parse_args([])
+        for key, value in overrides.items():
+            setattr(self._args, key, value) 
+        self.INFERENCE = (
+            self._args.inf_start is not None and self._args.inf_end is not None
+        )
+        setattr(self._args, "INFERENCE", self.INFERENCE)
 
-    def __init__(self):
-        self._args = self.get_parser()
+    def __getattr__(self, name):
+        """Delegate to underlying args for direct access: args.gpu, args.start, etc."""
+        try:
+            return getattr(self._args, name)
+        except AttributeError:
+            raise AttributeError(f"'{type(self).__name__}' object has no attribute '{name}'")
+
+    def __setattr__(self, name, value):
+        """Delegate attribute assignment to underlying args (allows kwargs-style mutation)."""
+        if name in ("_args", "INFERENCE"):
+            object.__setattr__(self, name, value)
+        else:
+            setattr(self._args, name, value)
 
     @property
     def args(self):
+        """The underlying argparse Namespace (for backward compatibility)."""
         return self._args
 
-    def get_parser(self):
+    def _build_parser():
         parser = argparse.ArgumentParser()
         parser.add_argument('--gpu', type=str, default='1', help='If not GPU 1, changes OPTUNA_STORAGE_PATH.')
         parser.add_argument('--study_name', type=str, default='', help='If not empty, uses the study name. Model name is added to the beginning of the study name.')
@@ -39,4 +70,5 @@ class HpoArgs:
         parser.add_argument('--yaml_file', type=str, default='optuna_vars.yaml', help='YAML file to use for the study. Default is optuna_vars.yaml. Contained in ./config/')
         parser.add_argument('--model_id_name', type=str, default=None, help='Name to use for the model id, trail number is added to the end. Default is set by a series of parameters.')
         parser.add_argument('--volatility', action='store_true', help='If True, uses the volatility target.')
-        return parser.parse_args()
+        return parser
+
