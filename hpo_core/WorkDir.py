@@ -50,28 +50,28 @@ class WorkDir:
         return self.work_dir
 
     # ------------------------ Train Data ------------------------
-    def train_data_path(self) -> Path:
+    def get_train_data_path(self) -> Path:
         """Path to the train data. This could be either the OHLCV or the returns data."""
         return self.work_dir / "train_data.csv"
 
     def write_train_data(self, data: pd.DataFrame):
-        data.to_csv(self.train_data_path(), index=False)
+        data.to_csv(self.get_train_data_path(), index=False)
 
     # ------------------------ Inference Data ------------------------
-    def inf_data_path(self) -> Path:
+    def get_inf_data_path(self) -> Path:
         return self.work_dir / "inf_data.csv"
 
     def write_inf_data(self, data: pd.DataFrame):
-        data.to_csv(self.inf_data_path(), index=False)
+        data.to_csv(self.get_inf_data_path(), index=False)
 
     # ------------------------ OHLCV Train Data ------------------------
-    def ohlcv_train_data_path(self) -> Path:
+    def get_ohlcv_train_data_path(self) -> Path:
         """Path to the original train data sliced by given dates."""
         return self.work_dir / "ohlcv_train_data.csv"
 
     def write_ohlcv_train_data(self, data: pd.DataFrame):
         self.create_work_dir()
-        data.to_csv(self.ohlcv_train_data_path(), index=False)
+        data.to_csv(self.get_ohlcv_train_data_path(), index=False)
 
     # ------------------------ OHLCV Inference Data ------------------------
     def get_org_ohlcv_inf_data_path(self) -> Path:
@@ -79,14 +79,14 @@ class WorkDir:
         return self.work_dir / "org_ohlcv_inf_data.csv"
 
     def write_org_ohlcv_inf_data(self, data: pd.DataFrame):
-        data.to_csv(self.org_ohlcv_inf_data_path(), index=False)
+        data.to_csv(self.get_org_ohlcv_inf_data_path(), index=False)
 
     # ------------------------ Returns Inference Data ------------------------
-    def ret_inf_data_path(self) -> Path:
+    def get_ret_inf_data_path(self) -> Path:
         return self.work_dir / "ret_inf_data.csv"
 
     def write_ret_inf_data(self, data: pd.DataFrame):
-        data.to_csv(self.ret_inf_data_path(), index=False)
+        data.to_csv(self.get_ret_inf_data_path(), index=False)
 
     # ------------------------ Inferenced Data ------------------------
     def get_inferenced_path(self) -> Path:
@@ -127,7 +127,7 @@ class WorkDir:
             self.set_full_data_path()
         return self.full_data_path
 
-    def get_full_data_df(self) -> pd.DataFrame:
+    def get_full_data(self) -> pd.DataFrame:
         if self.full_data_path is None:
             self.set_full_data_path()
         return pd.read_csv(self.full_data_path)

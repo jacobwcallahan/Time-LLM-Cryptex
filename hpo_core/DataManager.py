@@ -66,7 +66,7 @@ class DataManager:
 
         self.args.returns = args.returns
 
-        self.full_data = work_dir.get_full_data_df()
+        self.full_data = work_dir.get_full_data()
 
         self.first_time = datetime.fromtimestamp(int(self.full_data.iloc[0]['timestamp'])).timestamp()
         self.last_time = datetime.fromtimestamp(int(self.full_data.iloc[-1]['timestamp'])).timestamp()
@@ -106,9 +106,9 @@ class DataManager:
 
         # If the data is returns, convert it to returns and save it
         if self.args.returns:
-            self.data = self.convert_to_returns(self.work_dir.ohlcv_train_data_path())
+            self.data = self.convert_to_returns(self.work_dir.get_ohlcv_train_data_path())
             if self.args.INFERENCE:
-                self.inf_data = self.convert_to_returns(self.work_dir.org_ohlcv_inf_data_path())
+                self.inf_data = self.convert_to_returns(self.work_dir.get_org_ohlcv_inf_data_path())
         
         self.work_dir.write_train_data(self.data)
         self.work_dir.write_inf_data(self.inf_data)
@@ -242,8 +242,7 @@ class DataManager:
         return final_data
 
 
-
-    def convert_back_to_candlesticks(num_predictions: int, custom_save_path=None, work_dir: WorkDir | None = None):
+    def convert_back_to_candlesticks(self, num_predictions: int, org_inf_data: pd.DataFrame, processed_inf_data: pd.DataFrame, custom_save_path=None):
         """
         Convert inferenced returns data back to candlesticks. This is used to backtest the model.
         Writes the inferenced data to the inferenced data path.
@@ -251,20 +250,10 @@ class DataManager:
         args:
             num_predictions: number of predictions to convert back to candlesticks
             custom_save_path: optional path to save the result
-            work_dir: WorkDir instance for paths; uses default if None
         """
-        wd = work_dir if work_dir is not None else WorkDir()
-        org_inf_data_path = wd.org_ohlcv_inf_data_path()
-        inf_data_path = wd.inferenced_path()
 
-        if not os.path.exists(Path(inf_data_path)):
-            raise ValueError(f"Inference data path {inf_data_path} does not exist.")
-
-        if not os.path.exists(org_inf_data_path):
-            raise ValueError(f"Original data path {org_inf_data_path} does not exist.")
-
-        result = pd.read_csv(org_inf_data_path)
-        predicted_returns = pd.read_csv(inf_data_path)
+        result = org_inf_data.copy()
+        predicted_returns = processed_inf_data.copy()
 
         # Get the last known close price before predictions start
         try:
@@ -284,25 +273,23 @@ class DataManager:
         # Convert unix timestamp to UTC datetime
         result["timestamp"] = pd.to_datetime(result["timestamp"], unit='s', utc=True)
 
-        if custom_save_path is None:
-            result.to_csv(inf_data_path, index=False)
-        else:
+        if custom_save_path is not None:
             result.to_csv(custom_save_path, index=False)
-        print(f"Predicted candlesticks saved to {custom_save_path if custom_save_path is not None else inf_data_path}")
 
-        return custom_save_path if custom_save_path is not None else inf_data_path
+        return result
+
 
     def check_data_paths(self) -> bool:
-        if not os.path.exists(self.work_dir.ohlcv_train_data_path()):
-            raise ValueError(f"OHLCV train data path {self.work_dir.ohlcv_train_data_path()} does not exist.")
+        if not os.path.exists(self.work_dir.get_ohlcv_train_data_path()):
+            raise ValueError(f"OHLCV train data path {self.work_dir.get_ohlcv_train_data_path()} does not exist.")
 
-        if not os.path.exists(self.work_dir.train_data_path()):
-            raise ValueError(f"Train data path {self.work_dir.train_data_path()} does not exist.")
+        if not os.path.exists(self.work_dir.get_train_data_path()):
+            raise ValueError(f"Train data path {self.work_dir.get_train_data_path()} does not exist.")
         
         if self.args.INFERENCE:
-            if not os.path.exists(self.work_dir.org_ohlcv_inf_data_path()):
-                raise ValueError(f"Original inference data path {self.work_dir.org_ohlcv_inf_data_path()} does not exist.")
+            if not os.path.exists(self.work_dir.get_org_ohlcv_inf_data_path()):
+                raise ValueError(f"Original inference data path {self.work_dir.get_org_ohlcv_inf_data_path()} does not exist.")
             if self.args.returns:
-                if not os.path.exists(self.work_dir.ret_inf_data_path()):
-                    raise ValueError(f"Returns inference data path {self.work_dir.ret_inf_data_path()} does not exist.")
+                if not os.path.exists(self.work_dir.get_ret_inf_data_path()):
+                    raise ValueError(f"Returns inference data path {self.work_dir.get_ret_inf_data_path()} does not exist.")
         return True
