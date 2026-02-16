@@ -5,6 +5,9 @@ from backtesting.backtest import main as backtest_main
 from run_main import main as run_training_main
 from infra.TrainConfig import TrainConfig
 from hpo_core.DataManager import DataManager
+import os
+
+MLFLOW_TRACKING_URI = os.environ["MLFLOW_TRACKING_URI"]
 
 class PipelineRunner:
     """
@@ -70,7 +73,7 @@ class PipelineRunner:
         inf_args.model_id = run_id
         inf_args.llm_model = "LLAMA3.1"
         inf_args.data_path = self.work_dir.get_inf_data_path()
-        inf_args.mlflow_tracking_uri = None
+        inf_args.mlflow_tracking_uri = MLFLOW_TRACKING_URI
         inf_args.save_path = self.work_dir.get_work_dir_path()
         inf_args.experiment_name = experiment_name
 

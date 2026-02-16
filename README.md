@@ -2,8 +2,6 @@
   <h2><b>Time-LLM for Cryptocurrency Price Prediction</b></h2>
 </div>
 
-
-
 <div align="center">
 
 <p>A fork of Time-LLM adapted for cryptocurrency price forecasting</p>
@@ -69,34 +67,80 @@ For our hyperparameter optimization, we use 4 nodes with 4 NVIDIA Tesla V100 GPU
 docker-compose up
 ```
 
+## Project Structure
+
+| Directory / File | Description |
+|-----------------|-------------|
+| `run_hpo.py` | Entry point for hyperparameter optimization. Orchestrates Optuna trials, data prep, training, inference, and backtesting. |
+| `run_main.py` | Training script. Loads data, trains Time-LLM, logs to MLflow, saves checkpoints. |
+| `run_inference.py` | Inference script. Loads a trained model from MLflow and generates forecasts on new data. |
+| `hpo_core/` | HPO pipeline components. |
+| ↳ `HpoArgs.py` | CLI argument parsing for `run_hpo.py`. |
+| ↳ `DataManager.py` | Prepares train/inference data: date filtering, aggregation, returns conversion. |
+| ↳ `WorkDir.py` | Manages temp paths, YAML config loading, train/inference file paths. |
+| ↳ `OptunaParams.py` | Maps YAML config to Optuna suggestions (categorical, int, float). |
+| ↳ `PipelineRunner.py` | Runs training, inference, and backtest for each trial. |
+| ↳ `CalcMetrics.py` | Computes MDA, MSE, MAE on inference outputs. |
+| ↳ `MLFlowArtifacts.py` | Logs artifacts and metrics to MLflow. |
+| `infra/` | Configuration dataclasses. |
+| ↳ `TrainConfig.py` | Training arguments (model, data, optimization). |
+| ↳ `InferenceConfig.py` | Inference arguments. |
+| `config/yaml_params/` | Optuna hyperparameter search spaces. Define `categorical`, `int`, `float` sections. |
+| `models/` | Time-LLM model implementation. |
+| `utils/` | Data provider, metrics, tools. |
+| `backtesting/` | Backtrader-based backtesting and trading strategies. |
+
 ## Training with Hyperparameter Optimization
 1. Download datasets and place them under `./dataset`.
 2. Edit domain-specific prompts in ```./dataset/prompt_bank```.
-3. An example hyperparameter optimization setup is provided in `.config/optuna_vars.yaml`. You can run the setup with:
+3. An example hyperparameter optimization setup is provided in `config/yaml_params/optuna_vars.yaml`. To edit Optuna hyperparameters, create a YAML config file in `config/yaml_params/` and pass it with `--yaml_file`. You can run the setup with:
 
 ```bash
 python run_hpo.py [--args]
 ```
 
-4. Training metadata is saved to MLflow. The inferenced results and backtesting results are also saved in the MLFlow 
+Example with date ranges and inference:
+```bash
+python run_hpo.py --granularity daily --start 2020-01-01 --end 2022-12-31 --inf_start 2023-01-01 --inf_end 2023-12-31 --returns --backtest --experiment_name my_study --trials 20 --yaml_file optuna_vars.yaml
+```
+
+4. Training metadata is saved to MLflow. Inference results and backtesting results are also logged to MLflow.
 5. Trained models, inference CSVs and failed experiment logs are saved in the MinIO object store.
 
 ### Arguments
 
 | Argument | Type | Default | Description |
 |-----------|------|----------|--------------|
-| `--gpu` | `str` | `'1'` | If not GPU 1, it changes the location of the databases. |
-| `--new_study` | *flag* | `False` | If flag is set, creates a new Optuna study based on datetime. |
-| `--study_name` | `str` | `'optuna_study'` | If not empty, uses the given study name. The model name is prepended automatically. |
-| `--db_name` | `str` | `'optuna_study.db'` | Name of the Optuna database file to access. |
-| `--data_path` | `str` | `'daily/candlesticks-d.csv'` | Dataset path inside `./dataset/cryptex/`. |
+| `--gpu` | `str` | `'1'` | If not GPU 1, changes the Optuna storage path. |
+| `--study_name` | `str` | `''` | If not empty, uses the given study name. Model name is prepended automatically. |
+| `--granularity` | `str` | `'daily'` | Time granularity: `daily`, `hourly`, `weekly`, or `minute`. |
+| `--start` | `str` | `None` | Start date for training data. Format: `YYYY-MM-DD`. |
+| `--end` | `str` | `None` | End date for training data. Format: `YYYY-MM-DD`. |
+| `--inf_start` | `str` | `None` | Start date for inference data. Format: `YYYY-MM-DD`. |
+| `--inf_end` | `str` | `None` | End date for inference data. Format: `YYYY-MM-DD`. |
+| `--data_path` | `str` | `None` | Data path (optional). If not provided, uses the full dataset. |
 | `--returns` | *flag* | `False` | Trains model with returns instead of OHLCV if set. |
-| `--inf_path` | `str` | `None` | Path to inference dataset inside `./dataset/cryptex/`. |
 | `--backtest` | *flag* | `False` | Runs backtest automatically after training. |
-| `--root_path` | `str` | `'./dataset/cryptex/'` | Root path for datasets. |
 | `--experiment_name` | `str` | `None` | MLflow experiment name (optional). |
 | `--trials` | `int` | `10` | Number of Optuna trials to run. |
+| `--aggregate` | `int` | `1` | Aggregates from original granularity to the specified granularity. |
+| `--no_inf_aggregate` | *flag* | `False` | Disables aggregation of inference data. |
+| `--log_all_metrics` | *flag* | `False` | Logs all metrics to MLflow (not just the best). |
+| `--yaml_file` | `str` | `'optuna_vars.yaml'` | YAML file for the study in `config/yaml_params/`. |
+| `--model_id_name` | `str` | `None` | Custom name for model ID (trial number is appended). |
+| `--volatility` | *flag* | `False` | Uses the volatility target. |
 
+### Pipeline Flow
+
+For each Optuna trial, the HPO pipeline runs:
+
+1. **Data preparation** — `DataManager` loads data from `dataset/candles/`, filters by `--start`/`--end` and `--inf_start`/`--inf_end`, optionally aggregates and converts to returns, and writes `train_data.csv` and `inf_data.csv` to a temp work dir.
+2. **Hyperparameter suggestion** — `OptunaParams` reads the YAML from `config/yaml_params/` and suggests values for the trial (e.g., `seq_len`, `learning_rate`, `loss`).
+3. **Training** — `PipelineRunner` builds a `TrainConfig` from the trial params and calls `run_main.py`, which trains Time-LLM and logs metrics to MLflow.
+4. **Inference** (if `--inf_start`/`--inf_end` are set) — Loads the trained model from MLflow and generates forecasts on the inference data.
+5. **Metrics & backtest** — `CalcMetrics` computes MDA, MSE, MAE. If `--backtest` is set, runs backtesting and logs the summary table to MLflow.
+
+The validation metric (e.g., `vali_mae_metric`) from step 3 is used by Optuna to guide the search.
 
 ### Key hyperparameters
 The following are hyperparameters we found most influential for good performance:
@@ -142,7 +186,7 @@ python backtest.py --data <path_to_csv>
 To run a backtest on all implemented strategies in `strategies.py`.
 
 You can add the flags below followed by the name of a strategy (as defined in the `STRATEGIES` dictionary in `backtest.py`, which is also where you'd want to change strategy parameters):
-- `--strategy` to run backtestin on a specific strategy
+- `--strategy` to run backtest on a specific strategy
 - `--optimize` to do a strategy parameter search with ranges specified in `OPTIMIZATION_RANGES` in `backtest.py`
 - `--walk_forward` to do walk forward optimization with the same parameter ranges
 
