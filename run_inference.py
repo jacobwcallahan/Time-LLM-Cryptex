@@ -9,6 +9,7 @@ from types import SimpleNamespace
 from tqdm import tqdm
 from models import TimeLLM
 import tempfile
+from infra.InferenceConfig import InferenceConfig
 
 # --- Centralized Configuration ---
 MLFLOW_SERVER_IP = "192.168.1.103"
@@ -165,5 +166,5 @@ def main(args):
             print(f"Logged inference results as 'inference.csv' to MLflow run {run_id}.")
 
 if __name__ == '__main__':
-    args = parse_args()
+    args = InferenceConfig.parse()
     main(args) 

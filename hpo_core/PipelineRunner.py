@@ -3,6 +3,7 @@ from run_inference import main as run_inference_main
 import argparse
 from backtesting.backtest import main as backtest_main
 from run_main import main as run_training_main
+from infra.TrainConfig import TrainConfig
 
 class PipelineRunner:
     """
@@ -18,43 +19,40 @@ class PipelineRunner:
             "model_id": "run",
             "seed": 2021,
             "data": "CRYPTEX",
-            "root_path": work_dir_path,
-            "data_path": "train_data.csv",
+            "root_path": ".",
+            "data_path": self.work_dir.get_train_data_path(),
             "features": "MS",
             "target": "close",
             "checkpoints": work_dir_path,
-            "seq_len": 96,
-            "pred_len": 96,
+            "seq_len": config['seq_len'],
+            "pred_len": config['pred_len'],
             "enc_in": 7,
-            "d_model": 16,
-            "n_heads": 8,
-            "d_ff": 32,
-            "dropout": 0.1,
-            "patch_len": 16,
-            "stride": 8,
-            "llm_model": "LLAMA3.1",
-            "num_workers": 10,
-            "train_epochs": 10,
-            "batch_size": 32,
-            "eval_batch_size": 8,
-            "patience": 10,
-            "learning_rate": 0.0001,
-            "loss": "MSE",
-            "metric": "MAE",
-            "lradj": "type1",
-            "pct_start": 0.2,
+            "d_model": config['d_model'],
+            "n_heads": config['n_heads'],
+            "d_ff": config['d_ff'],
+            "dropout": config['dropout'],
+            "patch_len": config['patch_len'],
+            "stride": config['stride'],
+            "llm_model": config['llm_model'],
+            "batch_size": config['batch_size'],
+            "learning_rate": config['learning_rate'],
+            "loss": config['loss'],
+            "metric": config['metric'],
+            "lradj": config['lradj'],
+            "pct_start": config['pct_start'],
+            "train_epochs": config['epochs'],
             "use_amp": False,
-            "llm_layers": 6,
-            "percent": 100,
-            "num_tokens": 1000,
+            "llm_layers": config['llm_layers'],
+            "num_tokens": config['num_tokens'],
             "enable_mlflow": True,
-            "experiment_name": None,
+            "experiment_name": config['experiment_name'],
         }
-        training_args = argparse.Namespace(**{**defaults, **config})
+        training_args = TrainConfig.from_dict({**defaults, **config})
         
         run_training_main(training_args)
 
     def run_inference(self, experiment_name: str, run_id: str):
+        # TODO: Make this a InferenceConfig object
         inf_args = argparse.ArgumentParser()
         inf_args.model_id = run_id
         inf_args.llm_model = "LLAMA3.1"

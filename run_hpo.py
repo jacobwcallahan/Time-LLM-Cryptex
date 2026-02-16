@@ -37,7 +37,7 @@ import os
 
 import yaml
 from pathlib import Path
-from utils.pipeline import run_inference, perform_backtest, get_mse_vals, get_mda_vals, get_mae_vals
+from utils.pipeline import perform_backtest
 import warnings
 import shutil
 
@@ -45,11 +45,14 @@ from hpo_core.DataManager import DataManager
 from hpo_core.WorkDir import WorkDir
 from hpo_core.HpoArgs import HpoArgs
 from hpo_core.OptunaParams import OptunaParams
+from hpo_core.PipelineRunner import PipelineRunner
+from hpo_core.CalcMetrics import CalcMetrics
+from hpo_core.MLFlowArtifacts import MLFlowArtifacts
 
 # --- Centralized Configuration ---
 MLFLOW_SERVER_IP = "192.168.1.103"
 # MLflow
-os.environ["MLFLOW_TRACKING_URI"] = f"http://{MLFLOW_SERVER_IP}:5000" # Assumes the server is running. Can set to "" to save locally
+os.environ["MLFLOW_TRACKING_URI"] = f"http://{MLFLOW_SERVER_IP}:5005" # Assumes the server is running. Can set to "" to save locally
 
 # MinIO
 os.environ["AWS_ACCESS_KEY_ID"] = "minioadmin"
@@ -60,7 +63,6 @@ llm_model = "LLAMA3.1"
 DATASET_PATH = Path("./dataset/candles/") # Dataset path for gpu1 (without specific dataset)
 DATA_PATH = Path("temp/data.csv") # Data path in temp folder
 INF_PATH = Path("temp/inf_data.csv") # Inference path in temp folder
-INFERENCE = True # Bool to determine whether to run inference
 ARGS = {"gpu": 1, 
         "study_name": '', 
         "granularity": 'daily', 
@@ -154,7 +156,7 @@ def create_train_cmd(trial_dict, model_id, data_path):
     ]
     return cmd
 
-def run_pipeline(run, mlflow_client, model_id, llm_model, ARGS, trial_dict, experiment_name):
+def run_pipeline(run, mlflow_client, model_id, llm_model, args: HpoArgs, trial_dict, experiment_name, data_manager: DataManager, work_dir: WorkDir):
     """
     Runs the pipeline for the model if the inference path is provided.
     It logs the MDA metric for the first candle, the parameters, and the summary table to the metrics database.
@@ -165,7 +167,7 @@ def run_pipeline(run, mlflow_client, model_id, llm_model, ARGS, trial_dict, expe
         mlflow_client: mlflow client
         model_id: model id
         llm_model: llm model
-        ARGS: arguments
+        args: arguments
         inf_path: path to the inference data
         trial_dict: dictionary of trial parameters
         experiment_name: experiment name
@@ -177,42 +179,19 @@ def run_pipeline(run, mlflow_client, model_id, llm_model, ARGS, trial_dict, expe
 
     # Checks to run inference if the inference path is provided
     # As well checks if the returns flag is set and converts the data back to candlesticks
-    if not INFERENCE:
+    if not args.INFERENCE:
         return
 
-    try:
-        ohlcv_path = run_inference(
-            model_id = model_id, 
-            mlflow_client = mlflow_client,
-            experiment_name = experiment_name,
-            dataset_path = DATASET_PATH.parent, 
-            granularity = ARGS["granularity"], 
-            aggregate = ARGS["aggregate"], 
-            start_date = ARGS["inf_start"], 
-            end_date = ARGS["inf_end"], 
-            save_path = inf_save_path)
-
-    except Exception as e:
-        print(f"\nInference failed - Stopping Pipeline: {e}\n")
-        return
-    
     # MDA vals must use the OHLCV data
-    mda_vals = get_mda_vals(ohlcv_path)
-
-    # MSE vals can use the returns data or the OHLCV data
-    mse_vals = get_mse_vals(inf_output_path, pred_len = trial_dict['pred_len'], target = trial_dict['target'])
-
-    rmse_vals = {f"RMSE_{key.split('_')[2]}": round((value) ** 0.5, 6) for key, value in mse_vals.items()}
-
-    # MAE vals can use the returns data or the OHLCV data
-    mae_vals = get_mae_vals(inf_output_path, pred_len = trial_dict['pred_len'], target = trial_dict['target'])
+    calc_metrics = CalcMetrics(args, data_manager, work_dir)
+    mda_vals, mse_vals, rmse_vals, mae_vals = calc_metrics.calc_metrics()
 
     # Turns the metrics into dataframes and saves them to the temp folder so they can be logged to the MLflow run as artifacts.
     pd.DataFrame(list[tuple](mse_vals.items()), columns=['metric', 'value']).to_csv(Path("temp") / "mse_metrics.csv", index=False)
     pd.DataFrame(list[tuple](rmse_vals.items()), columns=['metric', 'value']).to_csv(Path("temp") / "rmse_metrics.csv", index=False)
     pd.DataFrame(list[tuple](mae_vals.items()), columns=['metric', 'value']).to_csv(Path("temp") / "mae_metrics.csv", index=False)
 
-    if ARGS["log_all_metrics"]:
+    if args.log_all_metrics:
         mlflow.log_metrics(mda_vals, step = 1, run_id = run.info.run_id)
         mlflow.log_metrics(mse_vals, step = 1, run_id = run.info.run_id)
         mlflow.log_metrics(rmse_vals, step = 1, run_id = run.info.run_id)
@@ -258,7 +237,7 @@ def run_pipeline(run, mlflow_client, model_id, llm_model, ARGS, trial_dict, expe
         print(f"\nMDA metrics save failed: {e}\n")
 
     # Performs the backtest if the backtest flag is set
-    if ARGS["backtest"]:   
+    if args.backtest:   
         try:
             perform_backtest(ohlcv_path) # Performs backtest
         except Exception as e:
@@ -294,7 +273,7 @@ def objective(trial, args: HpoArgs, data_manager: DataManager, work_dir: WorkDir
 
     # Sets the optuna variables
     try:
-        optuna_params = OptunaParams(trial, args, args.yaml_file, work_dir)
+        optuna_params = OptunaParams(trial, args, work_dir)
         trial_dict = optuna_params.get_params()
     except ValueError as e:
         if "CategoricalDistribution does not support dynamic value space." in str(e):
@@ -315,36 +294,40 @@ def objective(trial, args: HpoArgs, data_manager: DataManager, work_dir: WorkDir
         model_id = f"trial_{trial_id}_{args.granularity}_{args.data_path if args.data_path is not None else 'full'}_dates_{args.start}_{args.end}_features_{trial_dict['features']}_seq_{trial_dict['seq_len']}"
 
     # Set the experiment name
-    experiment_name = trial_dict['experiment_name']
+    trial_dict["experiment_name"] = args.experiment_name
+    trial_dict["model_id"] = model_id
+    trial_dict["data_path"] = work_dir.get_train_data_path()
 
     # --- 4. Run the Trial and Get the Result ---
     # We use MLflow to get the result of the trial.
     # This is more robust than parsing stdout.
     client = mlflow.tracking.MlflowClient()
 
+
     
     # We need to find the MLflow run associated with this trial.
     # We'll use the model_id (which includes trial_id) as a unique tag.
     
     try:
-        if ARGS["backtest"] and not INFERENCE:
-            warnings.warn("Backtest flag is set but no inference date is provided. - Will not perform backtest.")
-
         # Creates the command to train the model
-        cmd = create_train_cmd(trial_dict, model_id, work_dir.train_data_path())
-        print(f"\n--- Starting Trial {trial.number} ---\n{' '.join(cmd)}\n")
+        pipeline_runner = PipelineRunner(work_dir)
+        pipeline_runner.run_training(trial_dict)
+        #cmd = create_train_cmd(trial_dict, model_id, work_dir.get_train_data_path())
+
+        
+        #print(f"\n--- Starting Trial {trial.number} ---\n{' '.join(cmd)}\n")
 
         # Launch the subprocess
-        subprocess.run(cmd, check=True, text=True, capture_output=True)
+        #subprocess.run(cmd, check=True, text=True, capture_output=True)
         # After the run completes, find it in MLflow
         time.sleep(4) # Give MLflow a moment to log everything
 
-        run = _find_mlflow_run(client, experiment_name, model_id)
+        run = _find_mlflow_run(client, trial_dict["experiment_name"], trial_dict["model_id"])
 
-        client.log_param(run_id = run.info.run_id, key = "granularity", value = ARGS["granularity"])
-        client.log_param(run_id = run.info.run_id, key = "start date", value = ARGS["start"])
-        client.log_param(run_id = run.info.run_id, key = "end date", value = ARGS["end"])
-        client.log_param(run_id = run.info.run_id, key = "aggregate", value = ARGS["aggregate"])
+        client.log_param(run_id = run.info.run_id, key = "granularity", value = args.granularity)
+        client.log_param(run_id = run.info.run_id, key = "start date", value = args.start)
+        client.log_param(run_id = run.info.run_id, key = "end date", value = args.end)
+        client.log_param(run_id = run.info.run_id, key = "aggregate", value = args.aggregate)
         
         if not run:
             raise optuna.exceptions.TrialPruned("Could not find MLflow run post-execution.")
@@ -364,7 +347,26 @@ def objective(trial, args: HpoArgs, data_manager: DataManager, work_dir: WorkDir
         
         # This section checks to run inference if the inference path is provided
         # As well checks if the returns flag is set and converts the data back to candlesticks
-        run_pipeline(run, client, model_id, llm_model, ARGS, trial_dict, experiment_name)
+        pipeline_runner = PipelineRunner(work_dir)
+        pipeline_runner.run_inference(experiment_name = trial_dict["experiment_name"], run_id = model_id)
+
+        if args.returns:
+            ohlcv_inf_data = data_manager.convert_back_to_candlesticks(optuna_params.params['pred_len'], work_dir.get_org_ohlcv_inf_data(), work_dir.get_inferenced_data())
+            work_dir.write_ohlcv_inferenced_data(ohlcv_inf_data)
+            work_dir.rename_ret_inferenced_data()
+        else:
+            work_dir.rename_ohlcv_inferenced_data()
+
+        calc_metrics = CalcMetrics(args, data_manager, work_dir, optuna_params)
+
+        metrics_dict = calc_metrics.calc_metrics()
+        mlflow_artifacts = MLFlowArtifacts(client, work_dir)
+        mlflow_artifacts.log_all_metrics(metrics_dict)
+
+        for metric, data in metrics_dict.items():
+            print(metric)
+            print(data)
+            print("--------------------------------")
 
         # Checks if the validation metric is 0
         if final_metric == 0:
@@ -380,7 +382,7 @@ def objective(trial, args: HpoArgs, data_manager: DataManager, work_dir: WorkDir
         
         time.sleep(2)
         # --- Error Logging to MLflow ---
-        run = _find_mlflow_run(client, experiment_name, model_id)
+        run = _find_mlflow_run(client, trial_dict["experiment_name"], trial_dict["model_id"])
 
         if run:
             failed_run_id = run.info.run_id
@@ -406,14 +408,12 @@ def main(args: HpoArgs):
         OPTUNA_STORAGE_PATH = f"sqlite:////mnt/nfs/mlflow/optuna_study.db"
         #** DATASET_PATH = Path("/mnt/nfs/datasets/")
         #** ignored while the /mnt nfs is not mounted
-
-
-    INFERENCE = args.inf_start is not None or args.inf_end is not None
     
 
     print(f"Prepping Data...")
     data_manager = DataManager(args, work_dir=work_dir)
-    
+    data_manager.prepare_train_data()
+    data_manager.prepare_inf_data()
 
     if args.study_name == '': # Uses the default study name
         study_name = f"{llm_model.lower()}_study"
@@ -455,8 +455,5 @@ def main(args: HpoArgs):
         shutil.rmtree("temp")
 
 if __name__ == "__main__":
-    args = HpoArgs().args
-
-    # Loads the arguments into the main function
-    # Ensures values are set to None and not 'None'
+    args = HpoArgs(parse_cli=True)
     main(args)

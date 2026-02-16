@@ -15,72 +15,20 @@ from utils.metrics import get_loss_function, get_metric_function
 from models import TimeLLM
 from utils.data_provider import data_provider
 from utils.tools import EarlyStopping, adjust_learning_rate, vali
+from dataclasses import asdict
+
 import shutil
 
 import mlflow
 import mlflow.pytorch
 
+from infra.TrainConfig import TrainConfig
+
 os.environ['CURL_CA_BUNDLE'] = ''
 os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "max_split_size_mb:64"
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
-def parse_args():
-    """
-    Parse command-line arguments for the TimeLLM training script.
-    Returns:
-        argparse.Namespace: Parsed arguments
-    """
-    parser = argparse.ArgumentParser(description='Time-LLM Training Script')
-
-    # Basic experiment config
-    parser.add_argument('--model_id', type=str, required=True, default='test', help='Unique identifier for this training run (used for logging, checkpointing, and experiment tracking).')
-    parser.add_argument('--seed', type=int, default=2021, help='Random seed for reproducibility across runs (affects data shuffling, weight initialization, etc.).')
-
-    # Data loader arguments
-    parser.add_argument('--data', type=str, required=True, default='CRYPTEX', help='Dataset name/type to use. For this project, should be "CRYPTEX".')
-    parser.add_argument('--root_path', type=str, default='./dataset', help='Root directory where all data files are stored.')
-    parser.add_argument('--data_path', type=str, default='candlesticks-D.csv', help='Filename of the main data CSV to use for training/validation/testing.')
-    parser.add_argument('--features', type=str, default='MS', help='Forecasting task type: "M": multivariate predict multivariate, "S": univariate predict univariate, "MS": multivariate predict univariate')
-    parser.add_argument('--target', type=str, default='close', help='Name of the target feature/column to forecast (used for S or MS tasks).')
-
-    parser.add_argument('--checkpoints', type=str, default='./checkpoints/', help='Directory where model checkpoints and temporary files will be saved during training.')
-
-    # Forecasting task arguments
-    parser.add_argument('--seq_len', type=int, default=96, help='Length of the input sequence (number of time steps fed into the model).')
-    parser.add_argument('--pred_len', type=int, default=96, help='Length of the prediction horizon (number of future time steps to forecast).')
-
-    # Model architecture arguments
-    parser.add_argument('--enc_in', type=int, default=7, help='Number of input features for RevIN (if affine=True).')
-    parser.add_argument('--d_model', type=int, default=16, help='Dimensionality of the patch embeddings after the PatchEmbedder.')
-    parser.add_argument('--n_heads', type=int, default=8, help='Number of attention heads in the Reprogramming Layer (for multi-head attention layers).')
-    parser.add_argument('--d_ff', type=int, default=32, help='Dimensionality of the feedforward network at the output layer (hard-sliced).')
-    parser.add_argument('--dropout', type=float, default=0.1, help='Dropout rate applied throughout the model to prevent overfitting.')
-
-    parser.add_argument('--patch_len', type=int, default=16, help='Patch length for patch-based models (number of time steps per patch).')
-    parser.add_argument('--stride', type=int, default=8, help='Stride for patch-based models (step size between patches).')
-    parser.add_argument('--llm_model', type=str, default='LLAMA', help='Name of the LLM model (for experiment tracking and logging purposes).')
-
-    # Optimization and training arguments
-    parser.add_argument('--num_workers', type=int, default=10, help='Number of worker processes for data loading (higher values may speed up data loading).')
-    parser.add_argument('--train_epochs', type=int, default=10, help='Total number of training epochs (full passes through the training dataset).')
-    parser.add_argument('--batch_size', type=int, default=32, help='Batch size for training (number of samples per training step).')
-    parser.add_argument('--eval_batch_size', type=int, default=8, help='Batch size for evaluation/validation (number of samples per evaluation step).')
-    parser.add_argument('--patience', type=int, default=10, help='Number of epochs to wait for improvement before early stopping (prevents overfitting).')
-    parser.add_argument('--learning_rate', type=float, default=0.0001, help='Initial learning rate for the optimizer.')
-    parser.add_argument('--loss', type=str, default='MSE', help='Loss function to use for training (e.g., "MSE" for mean squared error).')
-    parser.add_argument('--metric', type=str, default='MAE', help='Evaluation metric to use (e.g., "MAE" for mean absolute error).')
-    parser.add_argument('--lradj', type=str, default='type1', help='Learning rate adjustment strategy: "type1", "COS", or "TST".')
-    parser.add_argument('--pct_start', type=float, default=0.2, help='Percentage of the OneCycleLR schedule spent increasing the learning rate (used if OneCycleLR is selected).')
-    parser.add_argument('--use_amp', action='store_true', help='Enable automatic mixed precision (AMP) training for faster and more memory-efficient training on supported hardware.')
-    parser.add_argument('--llm_layers', type=int, default=6, help='Number of LLM layers to use (if applicable to the model).')
-    parser.add_argument('--percent', type=int, default=100, help='Percentage of the dataset to use for training (useful for quick experiments or ablation studies).')
-    parser.add_argument('--num_tokens', type=int, default=1000, help='Number of tokens for the mapping layer (controls tokenization granularity).')
-    parser.add_argument('--enable_mlflow', action='store_true', default=True, help='Enable MLflow experiment tracking and logging (recommended: keep enabled).')
-    parser.add_argument('--experiment_name', type=str, default=None, help='Experiment name to use for MLflow experiment tracking and logging.')
-
-    return parser.parse_args()
-
-def run_training(args, accelerator):
+def run_training(args: TrainConfig, accelerator):
     """
     Main training/validation/testing logic for TimeLLM.
     Args:
@@ -100,13 +48,18 @@ def run_training(args, accelerator):
         run_context = mlflow.start_run(run_name=args.model_id)
         hostname = socket.gethostname()
         mlflow.set_tag("hostname", hostname)
-    else:
+    else:   
         run_context = nullcontext()
 
     with run_context:
         # Log all arguments to MLflow if enabled and on main process
         if enable_mlflow and accelerator.is_main_process:
-            mlflow.log_params(vars(args))
+            try:
+                mlflow.log_params(asdict(args))
+            except Exception as e:
+                print(e)
+                print(type(args))
+                raise ValueError(f"Error logging arguments to MLflow: {e}. While type is {type(args)}")
 
         # Load data for training, validation, and testing
         train_data, train_loader = data_provider(args, 'train')  # train_data: Dataset, train_loader: DataLoader
@@ -251,13 +204,13 @@ def run_training(args, accelerator):
             if os.path.exists(temp_checkpoint_path):
                 shutil.rmtree(temp_checkpoint_path)
 
-def main():
+def main(args: TrainConfig):
     """
     Main function to set up experiment, accelerator, and start training.
-    """
-    # Parse command-line arguments
-    args = parse_args()
 
+    Args:
+        args (TrainConfig): Training configuration
+    """
     # Set random seeds for reproducibility
     fix_seed = args.seed
     random.seed(fix_seed)
@@ -273,4 +226,5 @@ def main():
     run_training(args, accelerator)
 
 if __name__ == "__main__":
-    main()
+    args = TrainConfig.parse()
+    main(args)

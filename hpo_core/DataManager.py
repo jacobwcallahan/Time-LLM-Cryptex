@@ -74,46 +74,40 @@ class DataManager:
         self.data = None
         self.inf_data = None
         self.check_date_validity()
-        self.prepare_data()
 
-        self.check_data_paths()
-        print("--------------------------------")
-        print(datetime.fromtimestamp(self.first_time).date(), datetime.fromtimestamp(self.last_time).date())
-        print(datetime.fromtimestamp(self.start_date).date(), datetime.fromtimestamp(self.end_date).date())
-        print(datetime.fromtimestamp(self.inf_start_date).date(), datetime.fromtimestamp(self.inf_end_date).date())
-        print("--------------------------------")
-        print(len(self.inf_data))
-
-
-
-    def prepare_data(self):
+    def prepare_train_data(self):
         """
         Prepares the data for training and inference.
         """
         self.data = self.full_data[(self.full_data['timestamp'] >= self.start_date) & (self.full_data['timestamp'] <= self.end_date)]
 
-        if self.args.INFERENCE:
-            self.inf_data = self.full_data[(self.full_data['timestamp'] >= self.inf_start_date) & (self.full_data['timestamp'] <= self.inf_end_date)]
-
         self.data = self.aggregate_data(self.data, self.aggregate)
-        if self.args.INFERENCE:
-            self.inf_data = self.aggregate_data(self.inf_data, self.aggregate)
 
         # Write the OHLCV train data to the work directory
         self.work_dir.write_ohlcv_train_data(self.data)
-        if self.args.INFERENCE:
-            self.work_dir.write_org_ohlcv_inf_data(self.inf_data)
 
         # If the data is returns, convert it to returns and save it
         if self.args.returns:
-            self.data = self.convert_to_returns(self.work_dir.get_ohlcv_train_data_path())
-            if self.args.INFERENCE:
-                self.inf_data = self.convert_to_returns(self.work_dir.get_org_ohlcv_inf_data_path())
-        
-        self.work_dir.write_train_data(self.data)
-        self.work_dir.write_inf_data(self.inf_data)
+            self.data = self.convert_to_returns(self.data)
+            self.work_dir.write_ret_train_data(self.data)
 
+        self.work_dir.write_train_data(self.data)
+
+    def prepare_inf_data(self):
+        if not self.args.INFERENCE:
+            warnings.warn("Inference data is not prepared. Please run the prepare_data function first.")
+            return
             
+        self.inf_data = self.full_data[(self.full_data['timestamp'] >= self.inf_start_date) & (self.full_data['timestamp'] <= self.inf_end_date)]
+        self.inf_data = self.aggregate_data(self.inf_data, self.aggregate)
+
+        self.work_dir.write_org_ohlcv_inf_data(self.inf_data)
+        if self.args.returns:
+            self.inf_data = self.convert_to_returns(self.inf_data)
+            self.work_dir.write_ret_inf_data(self.inf_data)
+
+        self.work_dir.write_inf_data(self.inf_data) 
+
     def check_date_validity(self):
         """
         Checks the validity of the start and end dates.
@@ -195,31 +189,26 @@ class DataManager:
 
         return out
 
-    def convert_to_returns(self, data_path, keep_high_low=False, keep_volume=True, log_returns=False):
+    def convert_to_returns(self, data: pd.DataFrame, keep_high_low=False, keep_volume=True, log_returns=False):
         """
         Convert data to returns.
 
         args:
-            data_path: path to the data
+            data: DataFrame containing the data
             log_returns: bool, if True, the data is converted to log returns
             keep_high_low: bool, if True, the high and low prices are kept
             keep_volume: bool, if True, the volume column is kept
         returns:
-            Path to the returns data file (data_path)
+                DataFrame containing the returns data
         """
         # Checks if the data path is a file or a directory and saves the output path accordingly
-
-        try:
-            data = pd.read_csv(data_path)
-        except:
-            raise ValueError(f"Data path {data_path} is not a valid file.")
         try:
             data = pd.DataFrame({"close": data["close"], "volume": data["volume"], "timestamp": data["timestamp"]})
-        except:
+        except Exception as e:
             print("-------------ERROR-------------------")
-            print(data.head())
+            print(e)
             print("-------------ERROR-------------------")
-            raise ValueError(f"Data path {data_path} is not a valid file.")
+            raise ValueError("Missing 'close', 'volume', or 'timestamp' columns")
         if log_returns:
             data["returns"] = np.log(data["close"] / data["close"].shift(1))
         else:
@@ -252,7 +241,7 @@ class DataManager:
             custom_save_path: optional path to save the result
         """
 
-        result = org_inf_data.copy()
+        result = org_inf_data
         predicted_returns = processed_inf_data.copy()
 
         # Get the last known close price before predictions start
@@ -280,6 +269,14 @@ class DataManager:
 
 
     def check_data_paths(self) -> bool:
+        """
+        Checks if the data paths exist.
+
+        args:
+            self: DataManager object
+        returns:
+            True if the data paths exist, False otherwise
+        """
         if not os.path.exists(self.work_dir.get_ohlcv_train_data_path()):
             raise ValueError(f"OHLCV train data path {self.work_dir.get_ohlcv_train_data_path()} does not exist.")
 

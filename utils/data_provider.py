@@ -33,11 +33,7 @@ class Dataset_Crypto(Dataset):
         try:
             df_raw = pd.read_csv(os.path.join(self.root_path, self.data_path))
         except Exception as e:
-            if df_raw is not None:
-                raise ValueError(f"Error reading data from {os.path.join(self.root_path, self.data_path)}: {e}")
-            else:
-                raise ValueError(f"Dataset is None. Please check if the data path is correct. {os.path.join(self.root_path, self.data_path)}")
-
+            raise ValueError(f"Error reading data from {os.path.join(self.root_path, self.data_path)}: {e}")
 
         # Always put target as last column (except timestamp)
         feature_cols = [col for col in df_raw.columns if col not in ['timestamp', self.target]]

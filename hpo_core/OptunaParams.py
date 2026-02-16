@@ -1,5 +1,4 @@
-import yaml
-from pathlib import Path
+
 from hpo_core.WorkDir import WorkDir
 from hpo_core.HpoArgs import HpoArgs
 
@@ -7,14 +6,12 @@ class OptunaParams:
     """
     This class is responsible for storing the optuna parameters.
     """
-    def __init__(self,trial, args: HpoArgs, yaml_file: Path, work_dir: WorkDir):
-        self.yaml_file = yaml_file
-        
+    def __init__(self,trial, args: HpoArgs, work_dir: WorkDir):
+        self.trial = trial
+        self.args = args
+        self.work_dir = work_dir
         self.params = self.set_optuna_vars(trial, args, work_dir)
-
-    def get_params(self):
-        with open(self.yaml_file, "r") as f:
-            self.params = yaml.safe_load(f)
+        
 
     def get_params(self):
         return self.params
@@ -34,8 +31,7 @@ class OptunaParams:
             params: Dictionary of trial parameters
         """
 
-        with open(Path("config") / args.yaml_file, "r") as f:
-            config = yaml.safe_load(f)
+        config = work_dir.get_yaml_file()
 
         params = {}
 
@@ -113,5 +109,15 @@ class OptunaParams:
         
         print("\n\n--------------------------------")
 
+        self.set_extra_params(params)
+
         return params
+
+    def set_extra_params(self, params: dict):
+        params["experiment_name"] = self.args.experiment_name
+        params["data_path"] = self.work_dir.get_train_data_path()
+        params["target"] = "returns" if self.args.returns else "close"
+        params['target'] = "volatility" if self.args.volatility else params["target"]
+        params["metric"] = "MSE"
+        params["llm_model"] = "LLAMA3.1"
 

@@ -23,9 +23,9 @@ class CalcMetrics:
     def calc_metrics(self):
         if self.args.INFERENCE:
             self.mda_vals = self.get_mda_vals(self.work_dir.get_ohlcv_inferenced_path())
-            self.mse_vals = self.get_mse_vals(self.work_dir.get_inferenced_path(), self.optuna_params.pred_len, target = self.optuna_params.target)
-            self.mae_vals = self.get_mae_vals(self.work_dir.get_inferenced_path(), self.optuna_params.pred_len, target = self.optuna_params.target)
-            return self.mda_vals, self.mse_vals, self.mae_vals
+            self.mse_vals = self.get_mse_vals(self.work_dir.get_inferenced_path(), self.optuna_params.params['pred_len'], target = self.optuna_params.params['target'])
+            self.mae_vals = self.get_mae_vals(self.work_dir.get_inferenced_path(), self.optuna_params.params['pred_len'], target = self.optuna_params.params['target'])
+            return {"mda": self.mda_vals, "mse": self.mse_vals, "mae": self.mae_vals}
         else:
             return {}, {}, {}
 

@@ -4,10 +4,9 @@ import numpy as np
 import pandas as pd
 import tqdm
 import os
-from sharpe_calculator import sharpe_from_trade_log, sortino_from_trade_log
-
-from utils import load_and_prepare_data
-from strategies import (
+from backtesting.sharpe_calculator import sharpe_from_trade_log, sortino_from_trade_log
+from backtesting.utils import load_and_prepare_data
+from backtesting.strategies import (
     SimpleAIStrategy, SLTPStrategy, MomentumAIStrategy,
     RSIAIStrategy, BollingerAIStrategy, MeanReversionAIStrategy,
     TrendFollowingAIStrategy, TradeLog

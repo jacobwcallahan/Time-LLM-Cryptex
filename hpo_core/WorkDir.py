@@ -2,6 +2,8 @@ from pathlib import Path
 import os
 import pandas as pd
 import hpo_core.HpoArgs as HpoArgs
+import yaml
+import shutil
 
 class WorkDir:
     """
@@ -49,6 +51,19 @@ class WorkDir:
     def get_work_dir_path(self) -> Path:
         return self.work_dir
 
+    # ------------------------ YAML File ------------------------
+    def get_yaml_file_path(self) -> Path:
+        if self.args.yaml_file.endswith(".yaml"):
+            yaml = self.args.yaml_file
+        else:
+            yaml = f"{self.args.yaml_file}.yaml"
+
+        return Path("config") / "yaml_params" / yaml
+
+    def get_yaml_file(self) -> dict:
+        with open(self.get_yaml_file_path(), "r") as f:
+            return yaml.safe_load(f)
+
     # ------------------------ Train Data ------------------------
     def get_train_data_path(self) -> Path:
         """Path to the train data. This could be either the OHLCV or the returns data."""
@@ -81,6 +96,16 @@ class WorkDir:
     def write_org_ohlcv_inf_data(self, data: pd.DataFrame):
         data.to_csv(self.get_org_ohlcv_inf_data_path(), index=False)
 
+    def get_org_ohlcv_inf_data(self) -> pd.DataFrame:
+        return pd.read_csv(self.get_org_ohlcv_inf_data_path())
+
+    # ------------------------ Returns Train Data ------------------------
+    def get_ret_train_data_path(self) -> Path:
+        return self.work_dir / "ret_train_data.csv"
+
+    def write_ret_train_data(self, data: pd.DataFrame):
+        data.to_csv(self.get_ret_train_data_path(), index=False)
+
     # ------------------------ Returns Inference Data ------------------------
     def get_ret_inf_data_path(self) -> Path:
         return self.work_dir / "ret_inf_data.csv"
@@ -92,6 +117,9 @@ class WorkDir:
     def get_inferenced_path(self) -> Path:
         """Path of the data that has already been inferenced."""
         return self.work_dir / "inference.csv"
+
+    def get_inferenced_data(self) -> pd.DataFrame:
+        return pd.read_csv(self.get_inferenced_path())
 
     # ------------------------ OHLCV Inferenced Data ------------------------
     def get_ohlcv_inferenced_path(self) -> Path:
@@ -114,6 +142,16 @@ class WorkDir:
     
     def get_ret_inf_data(self) -> pd.DataFrame:
         return pd.read_csv(self.get_ret_inferenced_path())
+
+    def rename_ret_inferenced_data(self):
+        """ Copies the inferenced data to the returns inferenced data path. 
+            This is to log the returns inferenced data to the MLflow run."""
+        shutil.copy(self.get_inferenced_path(), self.get_ret_inferenced_path())
+
+    def rename_ohlcv_inferenced_data(self):
+        """ Copies the inferenced data to the OHLCV inferenced data path. 
+            This is to log the OHLCV inferenced data to the MLflow run."""
+        shutil.copy(self.get_inferenced_path(), self.get_ohlcv_inferenced_path())
 
     # ------------------------ Full Data ------------------------
     def set_full_data_path(self):
