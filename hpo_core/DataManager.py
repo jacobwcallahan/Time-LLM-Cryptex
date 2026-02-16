@@ -56,11 +56,12 @@ class DataManager:
         self.args = args
         self.work_dir = work_dir
 
-        self.start_date = datetime.strptime(args.start, '%Y-%m-%d').timestamp()
-        self.end_date = datetime.strptime(args.end, '%Y-%m-%d').timestamp()
 
-        self.inf_start_date = datetime.strptime(args.inf_start, '%Y-%m-%d').timestamp()
-        self.inf_end_date = datetime.strptime(args.inf_end, '%Y-%m-%d').timestamp()
+        self.start_date = None
+        self.end_date = None
+
+        self.inf_start_date = None
+        self.inf_end_date = None
 
         self.aggregate = args.aggregate
 
@@ -97,6 +98,9 @@ class DataManager:
         if not self.args.INFERENCE:
             warnings.warn("Inference data is not prepared. Please run the prepare_data function first.")
             return
+
+        self.inf_start_date = datetime.strptime(self.args.inf_start, '%Y-%m-%d').timestamp()
+        self.inf_end_date = datetime.strptime(self.args.inf_end, '%Y-%m-%d').timestamp()
             
         self.inf_data = self.full_data[(self.full_data['timestamp'] >= self.inf_start_date) & (self.full_data['timestamp'] <= self.inf_end_date)]
         self.inf_data = self.aggregate_data(self.inf_data, self.aggregate)
@@ -113,17 +117,23 @@ class DataManager:
         Checks the validity of the start and end dates.
         """
 
-        if self.start_date is None:
+        if self.args.start is None:
             self.start_date = self.first_time
             warnings.warn(f"No start date provided. Using the first date of the dataset: {datetime.fromtimestamp(self.first_time).date()}")
-        if self.end_date is None:
-            self.end_date = self.last_time
-            warnings.warn(f"No end date provided. Using the last date of the dataset: {datetime.fromtimestamp(self.last_time).date()}\n")
-
-        if self.start_date is not None:
+        else:
+            self.start_date = datetime.strptime(self.args.start, '%Y-%m-%d').timestamp()
             if self.start_date < self.first_time:
                 warnings.warn(f"The start date given ({self.start_date}) is before the first date of the dataset. Using the first date of the dataset: {datetime.fromtimestamp(self.first_time).date()}\n")
                 self.start_date = self.first_time
+
+        if self.args.end is None:
+            self.end_date = self.last_time
+            warnings.warn(f"No end date provided. Using the last date of the dataset: {datetime.fromtimestamp(self.last_time).date()}\n")
+        else:
+            self.end_date = datetime.strptime(self.args.end, '%Y-%m-%d').timestamp()
+            if self.end_date > self.last_time:
+                warnings.warn(f"The end date given ({self.end_date}) is after the last date of the dataset. Using the last date of the dataset: {datetime.fromtimestamp(self.last_time).date()}\n")
+                self.end_date = self.last_time
 
         if self.start_date is not None and self.end_date is not None:
             if self.start_date > self.end_date:
@@ -131,10 +141,23 @@ class DataManager:
                 self.end_date = self.last_time
 
         if self.args.INFERENCE:
-            if self.inf_start_date is not None and self.inf_end_date is not None:
+            if self.args.inf_start is not None and self.args.inf_end is not None:
+                self.inf_start_date = datetime.strptime(self.args.inf_start, '%Y-%m-%d').timestamp()
+                self.inf_end_date = datetime.strptime(self.args.inf_end, '%Y-%m-%d').timestamp()
                 if self.inf_start_date > self.inf_end_date:
                     warnings.warn(f"The inference start date given ({self.inf_start_date}) is after the inference end date given ({self.inf_end_date}). Using the last date of the dataset: {datetime.fromtimestamp(self.last_time).date()} as the inference end date.\n")
                     self.inf_end_date = self.last_time
+            else:
+                if self.args.inf_start is not None:
+                    self.inf_start_date = datetime.strptime(self.args.inf_start, '%Y-%m-%d').timestamp()
+                    if self.inf_start_date < self.first_time:
+                        warnings.warn(f"The inference start date given ({self.inf_start_date}) is before the first date of the dataset. Using the first date of the dataset: {datetime.fromtimestamp(self.first_time).date()}\n")
+                        self.inf_start_date = self.first_time
+                if self.args.inf_end is not None:
+                    self.inf_end_date = datetime.strptime(self.args.inf_end, '%Y-%m-%d').timestamp()
+                    if self.inf_end_date > self.last_time:
+                        warnings.warn(f"The inference end date given ({self.inf_end_date}) is after the last date of the dataset. Using the last date of the dataset: {datetime.fromtimestamp(self.last_time).date()}\n")
+                        self.inf_end_date = self.last_time
 
             if self.start_date is not None and self.end_date is not None and self.inf_start_date is not None and self.inf_end_date is not None:
                 if self.end_date > self.inf_start_date:

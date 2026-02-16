@@ -63,11 +63,14 @@ class PipelineRunner:
 
         run_inference_main(inf_args)
 
-    def run_backtest(self):
+    def run_backtest(self, pipeline: bool = False):
         backtest_args = {
-            "data": self.work_dir.get_inf_data_path(),
+            "data": self.work_dir.get_ohlcv_inferenced_path(),
             "cash": 100000,
             "commission": 0.001,
-            "pipeline": True,
-        }
+            "pipeline": pipeline,
+            "optimize": False,
+            "strategy": None,
+            "walk_forward": None,
+            }
         backtest_main(backtest_args, summary_table_path = self.work_dir.summary_table_path())

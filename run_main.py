@@ -41,9 +41,12 @@ def run_training(args: TrainConfig, accelerator):
     if enable_mlflow and accelerator.is_main_process:
         print(f"Setting experiment name to {args.experiment_name}")
         if args.experiment_name:
+            print("Tracking URI:", mlflow.get_tracking_uri())
             mlflow.set_experiment(args.experiment_name)
         else:
             mlflow.set_experiment(args.llm_model)
+
+        print(f"beginning mlflow run for")
 
         run_context = mlflow.start_run(run_name=args.model_id)
         hostname = socket.gethostname()

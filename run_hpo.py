@@ -293,6 +293,8 @@ def objective(trial, args: HpoArgs, data_manager: DataManager, work_dir: WorkDir
     else:
         model_id = f"trial_{trial_id}_{args.granularity}_{args.data_path if args.data_path is not None else 'full'}_dates_{args.start}_{args.end}_features_{trial_dict['features']}_seq_{trial_dict['seq_len']}"
 
+    print(f"Trial dictionary: {trial_dict}\n\n")
+    
     # Set the experiment name
     trial_dict["experiment_name"] = args.experiment_name
     trial_dict["model_id"] = model_id
@@ -302,8 +304,6 @@ def objective(trial, args: HpoArgs, data_manager: DataManager, work_dir: WorkDir
     # We use MLflow to get the result of the trial.
     # This is more robust than parsing stdout.
     client = mlflow.tracking.MlflowClient()
-
-
     
     # We need to find the MLflow run associated with this trial.
     # We'll use the model_id (which includes trial_id) as a unique tag.
@@ -349,28 +349,35 @@ def objective(trial, args: HpoArgs, data_manager: DataManager, work_dir: WorkDir
         # This section checks to run inference if the inference path is provided
         # As well checks if the returns flag is set and converts the data back to candlesticks
         pipeline_runner = PipelineRunner(work_dir)
-        pipeline_runner.run_inference(experiment_name = trial_dict["experiment_name"], run_id = model_id)
+        if args.INFERENCE:
+            pipeline_runner.run_inference(experiment_name = trial_dict["experiment_name"], run_id = model_id)
 
-        if args.returns:
-            ohlcv_inf_data = data_manager.convert_back_to_candlesticks(optuna_params.params['pred_len'], work_dir.get_org_ohlcv_inf_data(), work_dir.get_inferenced_data())
-            work_dir.write_ohlcv_inferenced_data(ohlcv_inf_data)
-            work_dir.rename_ret_inferenced_data()
-        else:
-            work_dir.rename_ohlcv_inferenced_data()
+            mlflow_artifacts = MLFlowArtifacts(run.info.run_id, client, work_dir)
 
-        calc_metrics = CalcMetrics(args, data_manager, work_dir, optuna_params)
+            if args.returns:
+                ohlcv_inf_data = data_manager.convert_back_to_candlesticks(optuna_params.params['pred_len'], work_dir.get_org_ohlcv_inf_data(), work_dir.get_inferenced_data())
+                work_dir.write_ohlcv_inferenced_data(ohlcv_inf_data)
+                work_dir.rename_ret_inferenced_data()
+                mlflow_artifacts.log_inference_data(work_dir.get_ret_inferenced_path())
+            else:
+                work_dir.rename_ohlcv_inferenced_data()
+            
+            mlflow_artifacts.log_inference_data(work_dir.get_ohlcv_inferenced_path())
 
-        metrics_dict = calc_metrics.calc_metrics()
-        mlflow_artifacts = MLFlowArtifacts(client, work_dir)
-        mlflow_artifacts.log_all_metrics(run.info.run_id, metrics_dict)
+            calc_metrics = CalcMetrics(args, data_manager, work_dir, optuna_params)
 
-        for metric, data in metrics_dict.items():
-            print(metric)
-            print(data)
-            print("--------------------------------")
+            metrics_dict = calc_metrics.calc_metrics()
+            mlflow_artifacts.log_all_metrics(metrics_dict)
 
-        pipeline_runner.run_backtest(experiment_name = trial_dict["experiment_name"], run_id = model_id)
-        mlflow_artifacts.log_summary_table(run.info.run_id, work_dir.summary_table_path())
+            for metric, data in metrics_dict.items():
+                print(metric)
+                print(data)
+                print("--------------------------------")
+
+            if args.backtest:
+                pipeline_runner.run_backtest(pipeline = True)
+                mlflow_artifacts.log_summary_table(work_dir.summary_table_path())
+
 
         # Checks if the validation metric is 0
         if final_metric == 0:
