@@ -8,9 +8,18 @@ import plotly.graph_objects as go
 import tempfile
 import sys
 import os
-
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from run_inf_and_backtest import run_inference_and_backtest as run_inf
+from hpo_core.PipelineRunner import PipelineRunner
+from hpo_core.DataManager import DataManager
+from hpo_core.HpoArgs import HpoArgs
+from hpo_core.WorkDir import WorkDir
+import logging
+import traceback
+
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.DEBUG)
+logger.addHandler(logging.StreamHandler())
+
 
 # MLflow configuration
 MLFLOW_TRACKING_URI = "http://192.168.1.103:5000"
@@ -63,7 +72,7 @@ def end_after_start(end_date, start_date):
             info="End date MUST be after start date."
         )
 
-def run_inference_handler(model_name, experiment_name, custom_dataset_path, granularity, aggregate, start_date, end_date, save_path):
+def run_inference_handler(model_name, experiment_name, custom_dataset_path, granularity, aggregate, start_date, end_date, save_path = None):
     """Run inference using run_inf_and_backtest with backtest=False"""
     try:
         if not model_name:
@@ -71,33 +80,37 @@ def run_inference_handler(model_name, experiment_name, custom_dataset_path, gran
         if not experiment_name:
             return "Error: Experiment Name is required"
         
-        # Convert dates to string format if provided
-        start_str = start_date if start_date else None
-        end_str = end_date if end_date else None
-        
-        run_inf(
+        args = HpoArgs(
             model_name=model_name,
             experiment_name=experiment_name,
             granularity=granularity,
             aggregate=int(aggregate),
-            start_date=start_str,
-            end_date=end_str,
+            start_date=start_date,
+            end_date=end_date,
             custom_dataset_path=custom_dataset_path,
-            save_path=save_path,
-            backtest=False
         )
+        work_dir = WorkDir(args)
+        # Convert dates to string format if provided
+        start_str = start_date if start_date else None
+        end_str = end_date if end_date else None
+
+        data_manager = DataManager(args, work_dir)
+        pipeline_runner = PipelineRunner(work_dir)
+        pipeline_runner.run_inference(data_manager, experiment_name, model_name)
+
         return f"Inference completed successfully!\nResults saved to: {save_path}"
     except Exception as e:
         return f"Error running inference: {str(e)}"
 
 
-def check_and_plot_mlflow_inference(run_id, pred_horizon=1):
+def check_and_plot_mlflow_inference(experiment_name, run_id, pred_horizon=1):
     """Check if MLflow has inference data for the given run and plot it as candlestick with prediction overlay.
     
     Args:
         run_id: MLflow run ID
         pred_horizon: Prediction horizon to plot (1 = 1 step ahead, 2 = 2 steps ahead, etc.)
     """
+    logger.debug(f"Checking and plotting MLflow inference for run: {run_id} in experiment: {experiment_name}")
     if not run_id:
         return "Error: Please enter a Run ID", None
     
@@ -107,151 +120,139 @@ def check_and_plot_mlflow_inference(run_id, pred_horizon=1):
         pred_horizon = 1
     
     try:
-        client = mlflow.tracking.MlflowClient()
-        
-        # List artifacts for the run
-        artifacts = client.list_artifacts(run_id, path="inference")
-        
-        if not artifacts:
-            return f"No inference data found for run: {run_id}", None
-        
-        # Find the inference CSV file (prefer OHLCV file)
-        inference_file = None
-        for artifact in artifacts:
-            if 'inference' in artifact.path.lower() and artifact.path.endswith('.csv') or artifact.path.contains('ohlcv'):
-                inference_file = artifact.path
-                break
-        
-        # Fallback to any CSV if no OHLCV file found
-        if not inference_file:
-            for artifact in artifacts:
-                if artifact.path.endswith('.csv'):
-                    inference_file = artifact.path
-                    break
-        
-        if not inference_file:
-            return f"No CSV inference file found for run: {run_id}", None
-        
-        # Download the artifact to a temp directory
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            local_path = client.download_artifacts(run_id, inference_file, tmp_dir)
-            df = pd.read_csv(local_path)
-        
-        # Determine date column
-        date_col = None
-        if 'date' in df.columns:
-            date_col = 'date'
-        elif 'timestamp' in df.columns:
-            date_col = 'timestamp'
-        
-        if date_col:
-            # Convert timestamp to datetime
-            if df[date_col].dtype in ['int64', 'float64']:
-                df[date_col] = pd.to_datetime(df[date_col], unit='s')
-            else:
-                df[date_col] = pd.to_datetime(df[date_col])
-        
-        # Find available prediction columns
-        pred_cols = [c for c in df.columns if 'predicted' in c.lower()]
-        max_horizon = len(pred_cols) if pred_cols else 0
-        
-        # Check if we have OHLCV data
-        has_ohlcv = all(col in df.columns for col in ['open', 'high', 'low', 'close'])
-        
-        if has_ohlcv and date_col:
-            # Create candlestick chart
-            fig = go.Figure()
-            
-            # Add candlestick trace
-            fig.add_trace(go.Candlestick(
-                x=df[date_col],
-                open=df['open'],
-                high=df['high'],
-                low=df['low'],
-                close=df['close'],
-                name='OHLCV',
-                increasing_line_color='green',
-                decreasing_line_color='red'
-            ))
-            
-            # Add prediction line if available
-            pred_col = f'close_predicted_{pred_horizon}'
-            if pred_col in df.columns:
-                fig.add_trace(go.Scatter(
-                    x=df[date_col],
-                    y=df[pred_col],
-                    mode='lines',
-                    name=f'Prediction ({pred_horizon} step{"s" if pred_horizon > 1 else ""} ahead)',
-                    line=dict(color='blue', width=2)
-                ))
-            else:
-                # Try alternative prediction column naming
-                alt_pred_cols = [c for c in pred_cols if str(pred_horizon) in c]
-                if alt_pred_cols:
-                    fig.add_trace(go.Scatter(
-                        x=df[date_col],
-                        y=df[alt_pred_cols[0]],
-                        mode='lines',
-                        name=f'Prediction ({pred_horizon} step{"s" if pred_horizon > 1 else ""} ahead)',
-                        line=dict(color='blue', width=2)
-                    ))
-            
-            fig.update_layout(
-                title=f"Inference Results for Run: {run_id}",
-                xaxis_title="Date",
-                yaxis_title="Price",
-                xaxis_rangeslider_visible=False,
-                template="plotly_white"
-            )
-            
-            status = f"Found inference data for run: {run_id}\nShape: {df.shape[0]} rows, {df.shape[1]} columns\nAvailable prediction horizons: 1-{max_horizon}" if max_horizon > 0 else f"Found inference data for run: {run_id}\nShape: {df.shape[0]} rows, {df.shape[1]} columns"
-            return status, fig
-        
-        elif date_col:
-            # Fallback to line plot if no OHLCV data
-            fig = go.Figure()
-            
-            # Plot close price if available
-            if 'close' in df.columns:
-                fig.add_trace(go.Scatter(
-                    x=df[date_col],
-                    y=df['close'],
-                    mode='lines',
-                    name='Close Price',
-                    line=dict(color='black', width=1)
-                ))
-            
-            # Add prediction line
-            pred_col = f'close_predicted_{pred_horizon}'
-            if pred_col in df.columns:
-                fig.add_trace(go.Scatter(
-                    x=df[date_col],
-                    y=df[pred_col],
-                    mode='lines',
-                    name=f'Prediction ({pred_horizon} step{"s" if pred_horizon > 1 else ""} ahead)',
-                    line=dict(color='blue', width=2)
-                ))
-            
-            fig.update_layout(
-                title=f"Inference Results for Run: {run_id}",
-                xaxis_title="Date",
-                yaxis_title="Value",
-                template="plotly_white"
-            )
-            
-            status = f"Found inference data for run: {run_id}\nShape: {df.shape[0]} rows, {df.shape[1]} columns\nAvailable prediction horizons: 1-{max_horizon}" if max_horizon > 0 else f"Found inference data for run: {run_id}\nShape: {df.shape[0]} rows, {df.shape[1]} columns"
-            return status, fig
-        
-        else:
-            # No date column, create a simple index plot
-            numeric_cols = df.select_dtypes(include=['float64', 'int64']).columns[:4].tolist()
-            fig = px.line(df, y=numeric_cols, title=f"Inference Results for Run: {run_id}")
-            return f"Found inference data for run: {run_id}\nShape: {df.shape[0]} rows, {df.shape[1]} columns", fig
-        
-    except mlflow.exceptions.MlflowException as e:
-        return f"MLflow Error: {str(e)}", None
+        MLFLOW_TRACKING_URI = "http://192.168.1.106:5005"
+        mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
+        logger.debug(f"Getting MLflow client for experiment: {experiment_name}")
+        client = mlflow.tracking.MlflowClient(tracking_uri=MLFLOW_TRACKING_URI)
     except Exception as e:
         return f"Error: {str(e)}", None
+
+    runs = client.search_runs(experiment_ids=[experiment_name], filter_string=f"run_id = '{run_id}'", max_results=1)
+
+    logger.debug(f"Runs: {runs}")
+        
+    return None, None
+
+    logger.debug(f"Tracking URI: {mlflow.get_tracking_uri()}")
+
+
+    path = mlflow.artifacts.download_artifacts(
+        run_id=run_id,
+        artifact_path="ohlcv_inference.csv"   # relative inside artifact root
+    )
+
+    df = pd.read_csv(path)
+    
+    # Determine date column
+    date_col = None
+    if 'date' in df.columns:
+        date_col = 'date'
+    elif 'timestamp' in df.columns:
+        date_col = 'timestamp'
+    
+    if date_col:
+        # Convert timestamp to datetime
+        if df[date_col].dtype in ['int64', 'float64']:
+            df[date_col] = pd.to_datetime(df[date_col], unit='s')
+        else:
+            df[date_col] = pd.to_datetime(df[date_col])
+    
+    # Find available prediction columns
+    pred_cols = [c for c in df.columns if 'predicted' in c.lower()]
+    max_horizon = len(pred_cols) if pred_cols else 0
+    
+    # Check if we have OHLCV data
+    has_ohlcv = all(col in df.columns for col in ['open', 'high', 'low', 'close'])
+    
+    if has_ohlcv and date_col:
+        # Create candlestick chart
+        fig = go.Figure()
+        
+        # Add candlestick trace
+        fig.add_trace(go.Candlestick(
+            x=df[date_col],
+            open=df['open'],
+            high=df['high'],
+            low=df['low'],
+            close=df['close'],
+            name='OHLCV',
+            increasing_line_color='green',
+            decreasing_line_color='red'
+        ))
+        
+        # Add prediction line if available
+        pred_col = f'close_predicted_{pred_horizon}'
+        if pred_col in df.columns:
+            fig.add_trace(go.Scatter(
+                x=df[date_col],
+                y=df[pred_col],
+                mode='lines',
+                name=f'Prediction ({pred_horizon} step{"s" if pred_horizon > 1 else ""} ahead)',
+                line=dict(color='blue', width=2)
+            ))
+        else:
+            # Try alternative prediction column naming
+            alt_pred_cols = [c for c in pred_cols if str(pred_horizon) in c]
+            if alt_pred_cols:
+                fig.add_trace(go.Scatter(
+                    x=df[date_col],
+                    y=df[alt_pred_cols[0]],
+                    mode='lines',
+                    name=f'Prediction ({pred_horizon} step{"s" if pred_horizon > 1 else ""} ahead)',
+                    line=dict(color='blue', width=2)
+                ))
+        
+        fig.update_layout(
+            title=f"Inference Results for Run: {run_id}",
+            xaxis_title="Date",
+            yaxis_title="Price",
+            xaxis_rangeslider_visible=False,
+            template="plotly_white"
+        )
+        
+        status = f"Found inference data for run: {run_id}\nShape: {df.shape[0]} rows, {df.shape[1]} columns\nAvailable prediction horizons: 1-{max_horizon}" if max_horizon > 0 else f"Found inference data for run: {run_id}\nShape: {df.shape[0]} rows, {df.shape[1]} columns"
+        return status, fig
+    
+    elif date_col:
+        # Fallback to line plot if no OHLCV data
+        fig = go.Figure()
+        
+        # Plot close price if available
+        if 'close' in df.columns:
+            fig.add_trace(go.Scatter(
+                x=df[date_col],
+                y=df['close'],
+                mode='lines',
+                name='Close Price',
+                line=dict(color='black', width=1)
+            ))
+        
+        # Add prediction line
+        pred_col = f'close_predicted_{pred_horizon}'
+        if pred_col in df.columns:
+            fig.add_trace(go.Scatter(
+                x=df[date_col],
+                y=df[pred_col],
+                mode='lines',
+                name=f'Prediction ({pred_horizon} step{"s" if pred_horizon > 1 else ""} ahead)',
+                line=dict(color='blue', width=2)
+            ))
+        
+        fig.update_layout(
+            title=f"Inference Results for Run: {run_id}",
+            xaxis_title="Date",
+            yaxis_title="Value",
+            template="plotly_white"
+        )
+        
+        status = f"Found inference data for run: {run_id}\nShape: {df.shape[0]} rows, {df.shape[1]} columns\nAvailable prediction horizons: 1-{max_horizon}" if max_horizon > 0 else f"Found inference data for run: {run_id}\nShape: {df.shape[0]} rows, {df.shape[1]} columns"
+        return status, fig
+    
+    else:
+        # No date column, create a simple index plot
+        numeric_cols = df.select_dtypes(include=['float64', 'int64']).columns[:4].tolist()
+        fig = px.line(df, y=numeric_cols, title=f"Inference Results for Run: {run_id}")
+        return f"Found inference data for run: {run_id}\nShape: {df.shape[0]} rows, {df.shape[1]} columns", fig
 
 
 def run_backtest(inference_path, strategy, initial_capital, start_date, end_date, threshold):

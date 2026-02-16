@@ -12,7 +12,6 @@ from datetime import datetime
 import sys
 
 from helper_fcns import (
-    check_inf_after_train, 
     start_before_end, 
     end_after_start,
     run_inference_handler,
@@ -316,6 +315,7 @@ with gr.Blocks(title="Time-LLM-Cryptex", theme=gr.themes.Citrus()) as app:
                             experiment_name = gr.Textbox(label="Experiment Name", value=f"{datetime.now().strftime('%m.%d.%y')}_experiment", info="MLflow experiment name")
                             trials = gr.Number(label="Trials", value=10, info="Number of optimization trials")
                             aggregate = gr.Number(label="Aggregate", value=1, info="Aggregation period")
+                            mlflow_run_id = gr.Textbox(label="MLflow Run ID", value="", info="MLflow Run ID")
                         
                         with gr.Column():
                             start_date = gr.DateTime(label="Start Date", value="2014-09-17", info="Training start date (YYYY-MM-DD)", include_time=False)
@@ -325,7 +325,6 @@ with gr.Blocks(title="Time-LLM-Cryptex", theme=gr.themes.Citrus()) as app:
                             data_path = gr.Textbox(label="Data Path", value="", info="Custom data path (optional)")
                             yaml_file = gr.Textbox(label="YAML Config File", value="optuna_vars.yaml", info="Config file in ./config/")
 
-                            train_inf_start.change(check_inf_after_train, inputs=[end_date, train_inf_start], outputs=train_inf_start)
                             start_date.change(start_before_end, inputs=[start_date, end_date], outputs=start_date)
                             train_inf_start.change(start_before_end, inputs=[train_inf_start, train_inf_end], outputs=train_inf_start)
                     
@@ -664,6 +663,11 @@ with gr.Blocks(title="Time-LLM-Cryptex", theme=gr.themes.Citrus()) as app:
             gr.Markdown("Check if inference data exists in MLflow for a given run and visualize it as a candlestick chart with prediction overlay.")
             
             with gr.Row():
+                mlflow_experiment_name = gr.Textbox(
+                    label="Experiment Name",
+                    placeholder="e.g. my_experiment",
+                    info="MLflow experiment name"
+                )
                 mlflow_run_id = gr.Textbox(
                     label="MLflow Run ID",
                     placeholder="e.g. abc123def456",
@@ -684,7 +688,7 @@ with gr.Blocks(title="Time-LLM-Cryptex", theme=gr.themes.Citrus()) as app:
             
             check_mlflow_btn.click(
                 fn=check_and_plot_mlflow_inference,
-                inputs=[mlflow_run_id, mlflow_pred_horizon],
+                inputs=[mlflow_experiment_name, mlflow_run_id, mlflow_pred_horizon],
                 outputs=[mlflow_status, mlflow_inference_plot]
             )
         
@@ -758,4 +762,4 @@ with gr.Blocks(title="Time-LLM-Cryptex", theme=gr.themes.Citrus()) as app:
 
 
 if __name__ == "__main__":
-    app.launch(server_name="0.0.0.0", server_port=7860, share=False)
+    app.launch(server_name="0.0.0.0", server_port=9001, share=False, debug=True)

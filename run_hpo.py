@@ -28,17 +28,15 @@ Arguments:
 """
 
 import optuna
-import pandas as pd
+
 import subprocess
 import mlflow
 import uuid
 import time
 import os
 
-import yaml
 from pathlib import Path
-from utils.pipeline import perform_backtest
-import warnings
+
 import shutil
 
 from hpo_core.DataManager import DataManager
@@ -109,148 +107,6 @@ def _find_mlflow_run(client, experiment_name, model_id):
         return None # pruned
     
     return runs[0]
-
-
-def create_train_cmd(trial_dict, model_id, data_path):
-    """
-    Creates the command to train the model and returns it as a list.
-
-    args:
-        trial_dict: dictionary of trial parameters
-        model_id: model id
-        data_path: path to the data
-    
-    returns:
-        cmd (list): command to train the model
-    """
-    cmd = [
-        'accelerate', 'launch', '--multi_gpu', '--mixed_precision', 'bf16', '--num_processes', '4', '--main_process_port', '29500',
-        'run_main.py',
-        # Tuned Parameters
-        '--model_id', model_id,
-        '--features', trial_dict['features'],
-        '--seq_len', str(trial_dict['seq_len']),
-        '--pred_len', str(trial_dict['pred_len']),
-        '--llm_layers', str(trial_dict['llm_layers']),
-        '--d_model', str(trial_dict['d_model']),
-        '--n_heads', str(trial_dict['n_heads']),
-        '--d_ff', str(trial_dict['d_ff']),
-        '--dropout', str(trial_dict['dropout']),
-        '--patch_len', str(trial_dict['patch_len']),
-        '--stride', str(trial_dict['stride']),
-        '--batch_size', str(trial_dict['batch_size']),
-        '--learning_rate', str(trial_dict['learning_rate']),
-        '--num_tokens', str(trial_dict['num_tokens']),
-        '--loss', trial_dict['loss'],
-        '--lradj', trial_dict['lradj'],
-        '--pct_start', str(trial_dict['pct_start']),
-        '--metric', trial_dict['metric'],
-        # Static Parameters
-        '--llm_model', llm_model,
-        '--data', 'CRYPTEX',
-        '--root_path', ".",
-        '--data_path', str(data_path),
-        '--target', str(trial_dict['target']),
-        '--train_epochs', str(trial_dict['epochs']),
-        '--experiment_name', trial_dict['experiment_name'],
-    ]
-    return cmd
-
-def run_pipeline(run, mlflow_client, model_id, llm_model, args: HpoArgs, trial_dict, experiment_name, data_manager: DataManager, work_dir: WorkDir):
-    """
-    Runs the pipeline for the model if the inference path is provided.
-    It logs the MDA metric for the first candle, the parameters, and the summary table to the metrics database.
-    Also logs the summary table to the MLflow run.
-
-    Args:   
-        run: MLflow run object
-        mlflow_client: mlflow client
-        model_id: model id
-        llm_model: llm model
-        args: arguments
-        inf_path: path to the inference data
-        trial_dict: dictionary of trial parameters
-        experiment_name: experiment name
-    """
-    
-    inf_save_path = Path("temp")   # Folder name for the inference data
-    inf_output_path = Path("temp") / "inference.csv"      # Path to the inference data
-    ohlcv_path = Path("temp") / "inference.csv"    # Path to the OHLCV inference data
-
-    # Checks to run inference if the inference path is provided
-    # As well checks if the returns flag is set and converts the data back to candlesticks
-    if not args.INFERENCE:
-        return
-
-    # MDA vals must use the OHLCV data
-    calc_metrics = CalcMetrics(args, data_manager, work_dir)
-    mda_vals, mse_vals, rmse_vals, mae_vals = calc_metrics.calc_metrics()
-
-    # Turns the metrics into dataframes and saves them to the temp folder so they can be logged to the MLflow run as artifacts.
-    pd.DataFrame(list[tuple](mse_vals.items()), columns=['metric', 'value']).to_csv(Path("temp") / "mse_metrics.csv", index=False)
-    pd.DataFrame(list[tuple](rmse_vals.items()), columns=['metric', 'value']).to_csv(Path("temp") / "rmse_metrics.csv", index=False)
-    pd.DataFrame(list[tuple](mae_vals.items()), columns=['metric', 'value']).to_csv(Path("temp") / "mae_metrics.csv", index=False)
-
-    if args.log_all_metrics:
-        mlflow.log_metrics(mda_vals, step = 1, run_id = run.info.run_id)
-        mlflow.log_metrics(mse_vals, step = 1, run_id = run.info.run_id)
-        mlflow.log_metrics(rmse_vals, step = 1, run_id = run.info.run_id)
-    else:
-        max_mda = max(mda_vals.values())
-        
-        # Logs the corresponding candle for the best MDA metric
-        for key, value in mda_vals.items():
-            if value == max_mda:
-                mlflow.log_metric(key = f"Best Inf MDA", value = value, step = 1, run_id = run.info.run_id)
-                mlflow.log_metric(key = f"Best Inf MDA Candle", value = int(key.split("_")[2]), step = 1, run_id = run.info.run_id)
-                break
-
-        min_mse = min(mse_vals.values())
-        for key, value in mse_vals.items():
-            if value == min_mse:
-                mlflow.log_metric(key = f"Min Inf MSE", value = round(value, 6), step = 1, run_id = run.info.run_id)
-                mlflow.log_metric(key = f"Min Inf MSE Candle", value = int(key.split("_")[2]), step = 1, run_id = run.info.run_id)
-                break
-        
-        min_rmse = {"Min Inf RMSE": round((min_mse) ** 0.5, 6)}
-        mlflow.log_metrics(min_rmse, step = 1, run_id = run.info.run_id)
-
-    try:    
-        # Saves the MDA metrics to the MLflow as an artifact then removes the file
-        mda_path = Path("temp") / "mda_metrics.csv"
-        pd.DataFrame(list[tuple](mda_vals.items()), columns=['metric', 'value']).to_csv(mda_path, index=False)
-        mlflow.log_artifact(mda_path, run_id = run.info.run_id)
-
-        mse_path = Path("temp") / "mse_metrics.csv"
-        pd.DataFrame(list[tuple](mse_vals.items()), columns=['metric', 'value']).to_csv(mse_path, index=False)
-        mlflow.log_artifact(mse_path, run_id = run.info.run_id)
-
-        rmse_path = Path("temp") / "rmse_metrics.csv"
-        pd.DataFrame(list[tuple](rmse_vals.items()), columns=['metric', 'value']).to_csv(rmse_path, index=False)
-        mlflow.log_artifact(rmse_path, run_id = run.info.run_id)
-
-        mae_path = Path("temp") / "mae_metrics.csv"
-        pd.DataFrame(list[tuple](mae_vals.items()), columns=['metric', 'value']).to_csv(mae_path, index=False)
-        mlflow.log_artifact(mae_path, run_id = run.info.run_id)
-    
-    except Exception as e:
-        print(f"\nMDA metrics save failed: {e}\n")
-
-    # Performs the backtest if the backtest flag is set
-    if args.backtest:   
-        try:
-            perform_backtest(ohlcv_path) # Performs backtest
-        except Exception as e:
-            print(f"\nBacktest failed: \n\n{e}\n")  
-        
-        try:
-            summary_table = pd.read_csv(Path("temp") / "summary_table.csv")
-        except Exception as e:
-            print(f"\nSummary table save failed: {e}\n")
-            return
-
-        # Logs the summary table to the MLflow run
-        mlflow.log_artifact(Path("temp") / "summary_table.csv", run_id = run.info.run_id)
 
 
 # --- 1. Define the Objective Function ---
@@ -443,6 +299,7 @@ def main(args: HpoArgs):
     )
     
     print(f"Data is Prepped... Starting HPO...")
+    
     # 'n_trials' is the total number of experiments you want to run.
     # Optuna will intelligently choose the parameters for these runs.
     study.optimize(

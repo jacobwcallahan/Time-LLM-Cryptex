@@ -4,6 +4,7 @@ import argparse
 from backtesting.backtest import main as backtest_main
 from run_main import main as run_training_main
 from infra.TrainConfig import TrainConfig
+from hpo_core.DataManager import DataManager
 
 class PipelineRunner:
     """
@@ -51,7 +52,11 @@ class PipelineRunner:
         
         run_training_main(training_args)
 
-    def run_inference(self, experiment_name: str, run_id: str):
+    def run_inference(self, data_manager: DataManager, experiment_name: str, run_id: str):
+
+        # TODO Make this change the dates of the data. As well make it check if the data is already prepared.
+
+        data_manager.prepare_inf_data()
         # TODO: Make this a InferenceConfig object
         inf_args = argparse.ArgumentParser()
         inf_args.model_id = run_id
