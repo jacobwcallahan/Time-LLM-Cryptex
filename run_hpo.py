@@ -48,9 +48,9 @@ from hpo_core.CalcMetrics import CalcMetrics
 from hpo_core.MLFlowArtifacts import MLFlowArtifacts
 
 # --- Centralized Configuration ---
-MLFLOW_SERVER_IP = "192.168.1.106"
+MLFLOW_SERVER_IP = "192.168.1.103"
 # MLflow
-os.environ["MLFLOW_TRACKING_URI"] = f"http://{MLFLOW_SERVER_IP}:5005" # Assumes the server is running. Can set to "" to save locally
+os.environ["MLFLOW_TRACKING_URI"] = f"http://{MLFLOW_SERVER_IP}:5000" # Assumes the server is running. Can set to "" to save locally
 
 # MinIO
 os.environ["AWS_ACCESS_KEY_ID"] = "minioadmin"

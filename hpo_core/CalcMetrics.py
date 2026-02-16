@@ -20,7 +20,13 @@ class CalcMetrics:
         self.work_dir = work_dir
         self.optuna_params = optuna_params
 
-    def calc_metrics(self):
+    def calc_metrics(self) -> dict:
+        """
+        Calculates the metrics for the inference data.
+
+        returns:
+            dict: A dictionary containing the MDA, MSE, and MAE values.
+        """
         if self.args.INFERENCE:
             self.mda_vals = self.get_mda_vals(self.work_dir.get_ohlcv_inferenced_path())
             self.mse_vals = self.get_mse_vals(self.work_dir.get_inferenced_path(), self.optuna_params.params['pred_len'], target = self.optuna_params.params['target'])

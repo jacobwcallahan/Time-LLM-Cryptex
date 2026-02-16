@@ -53,6 +53,14 @@ class PipelineRunner:
         run_training_main(training_args)
 
     def run_inference(self, data_manager: DataManager, experiment_name: str, run_id: str):
+        """
+        Runs the inference pipeline.
+
+        Args:
+            data_manager (DataManager): The data manager object.
+            experiment_name (str): The experiment name.
+            run_id (str): The run ID.
+        """
 
         # TODO Make this change the dates of the data. As well make it check if the data is already prepared.
 
