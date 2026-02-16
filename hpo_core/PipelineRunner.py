@@ -70,4 +70,4 @@ class PipelineRunner:
             "commission": 0.001,
             "pipeline": True,
         }
-        backtest_main(backtest_args)
+        backtest_main(backtest_args, summary_table_path = self.work_dir.summary_table_path())

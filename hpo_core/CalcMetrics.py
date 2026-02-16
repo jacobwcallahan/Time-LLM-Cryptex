@@ -29,7 +29,7 @@ class CalcMetrics:
         else:
             return {}, {}, {}
 
-    def get_mda_vals(self, inf_path):
+    def get_mda_vals(self, inf_path) -> pd.DataFrame:
         """
         Perform analysis on the inference data.
         It can only be used on the OHLCV data.
@@ -93,9 +93,10 @@ class CalcMetrics:
             print(inf_path)
             raise ValueError("No valid MDA values found.")
         
+        mda_vals = pd.DataFrame(list[tuple](mda_vals.items()), columns=['prediction', 'value'])
         return mda_vals
 
-    def get_mse_vals(self, inf_path, pred_len, target = 'close'):
+    def get_mse_vals(self, inf_path, pred_len, target = 'close') -> pd.DataFrame:
         """
         Get the MSE values for the inference data.
 
@@ -127,9 +128,10 @@ class CalcMetrics:
             print(f"Error getting MSE values: {e}")
             raise ValueError(f"Error getting MSE values: {e}")
 
+        mse_vals = pd.DataFrame(list[tuple](mse_vals.items()), columns=['prediction', 'value'])
         return mse_vals
 
-    def get_mae_vals(self, inf_path, pred_len, target = 'close'):
+    def get_mae_vals(self, inf_path, pred_len, target = 'close') -> pd.DataFrame:
         """
         Get the MAE values for the inference data.
         """
@@ -156,6 +158,7 @@ class CalcMetrics:
             print(f"Error getting MAE values: {e}")
             raise ValueError(f"Error getting MAE values: {e}")
 
+        mae_vals = pd.DataFrame(list[tuple](mae_vals.items()), columns=['prediction', 'value'])
         return mae_vals
 
 

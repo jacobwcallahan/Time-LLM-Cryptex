@@ -50,7 +50,7 @@ from hpo_core.CalcMetrics import CalcMetrics
 from hpo_core.MLFlowArtifacts import MLFlowArtifacts
 
 # --- Centralized Configuration ---
-MLFLOW_SERVER_IP = "192.168.1.103"
+MLFLOW_SERVER_IP = "192.168.1.106"
 # MLflow
 os.environ["MLFLOW_TRACKING_URI"] = f"http://{MLFLOW_SERVER_IP}:5005" # Assumes the server is running. Can set to "" to save locally
 
@@ -322,6 +322,7 @@ def objective(trial, args: HpoArgs, data_manager: DataManager, work_dir: WorkDir
         # After the run completes, find it in MLflow
         time.sleep(4) # Give MLflow a moment to log everything
 
+        print(f"Finding MLflow run for trial {trial.number}")
         run = _find_mlflow_run(client, trial_dict["experiment_name"], trial_dict["model_id"])
 
         client.log_param(run_id = run.info.run_id, key = "granularity", value = args.granularity)
@@ -361,12 +362,15 @@ def objective(trial, args: HpoArgs, data_manager: DataManager, work_dir: WorkDir
 
         metrics_dict = calc_metrics.calc_metrics()
         mlflow_artifacts = MLFlowArtifacts(client, work_dir)
-        mlflow_artifacts.log_all_metrics(metrics_dict)
+        mlflow_artifacts.log_all_metrics(run.info.run_id, metrics_dict)
 
         for metric, data in metrics_dict.items():
             print(metric)
             print(data)
             print("--------------------------------")
+
+        pipeline_runner.run_backtest(experiment_name = trial_dict["experiment_name"], run_id = model_id)
+        mlflow_artifacts.log_summary_table(run.info.run_id, work_dir.summary_table_path())
 
         # Checks if the validation metric is 0
         if final_metric == 0:
@@ -408,6 +412,8 @@ def main(args: HpoArgs):
         OPTUNA_STORAGE_PATH = f"sqlite:////mnt/nfs/mlflow/optuna_study.db"
         #** DATASET_PATH = Path("/mnt/nfs/datasets/")
         #** ignored while the /mnt nfs is not mounted
+    else:
+        OPTUNA_STORAGE_PATH = "sqlite:////data-fast/nfs/mlflow/optuna_study.db"
     
 
     print(f"Prepping Data...")
@@ -453,6 +459,7 @@ def main(args: HpoArgs):
 
     if os.path.exists("temp"):
         shutil.rmtree("temp")
+
 
 if __name__ == "__main__":
     args = HpoArgs(parse_cli=True)

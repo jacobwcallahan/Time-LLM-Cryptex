@@ -174,7 +174,14 @@ class WorkDir:
     def metrics_path(self, metric: str) -> Path:
         return self.work_dir / f"{metric}_metrics.csv"
 
-    def write_metrics(self, metric: str, data: pd.DataFrame):
+    def write_metrics(self, metric: str, data: pd.DataFrame | dict):
+        if not isinstance(data, pd.DataFrame):
+            try:
+                data = pd.DataFrame(data)
+            except Exception as e:
+                print(f"Data is not a dictionary: {data}")
+                print(f"Error writing metrics: {e}")
+                raise ValueError(f"Error writing metrics: {e}")
         data.to_csv(self.metrics_path(metric), index=False)
 
     # ------------------------ Summary Table ------------------------

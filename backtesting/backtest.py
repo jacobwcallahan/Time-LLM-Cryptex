@@ -604,7 +604,7 @@ def parse_args():
     
     return parser.parse_args()
 
-def main(args_dict):
+def main(args_dict, summary_table_path: str = None):
     runner = BacktestRunner(args_dict['data'], cash=args_dict['cash'], commission=args_dict['commission'], pipeline=args_dict['pipeline'])
     
     if args_dict['optimize']:
@@ -629,7 +629,7 @@ def main(args_dict):
         summary_table = runner.create_summary_table()
         if runner.pipeline:
             os.makedirs("temp", exist_ok=True)
-            summary_table.to_csv("temp/summary_table.csv", index=False)
+            summary_table.to_csv(summary_table_path, index=False)
         else:
             print(summary_table)
 
