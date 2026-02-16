@@ -19,3 +19,7 @@ boto3
 backtrader
 gradio
 python-dateutil
+gcc_linux-64 
+gxx_linux-64
+mpich
+mpi4py
