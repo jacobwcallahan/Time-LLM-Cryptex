@@ -30,7 +30,7 @@
 # TO CHANGE THE VARIABLES, YOU MUST HAVE A NEW OPTUNA STUDY NAME
 
 categorical:
-  features: ["S", "M"]
+  features: ["M"]
   seq_len: [28, 56, 84, 168]
   pred_len: [7, 14]
   num_tokens: [100, 500, 1000]
