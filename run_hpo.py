@@ -205,8 +205,9 @@ def objective(trial, args: HpoArgs, data_manager: DataManager, work_dir: WorkDir
         # This section checks to run inference if the inference path is provided
         # As well checks if the returns flag is set and converts the data back to candlesticks
         pipeline_runner = PipelineRunner(work_dir)
-        if args.INFERENCE:
-            pipeline_runner.run_inference(data_manager = data_manager, experiment_name = trial_dict["experiment_name"], run_id = model_id)
+        if args.inf_start is not None and args.inf_end is not None:
+            
+            pipeline_runner.run_inference(experiment_name = trial_dict["experiment_name"], run_id = model_id)
 
             mlflow_artifacts = MLFlowArtifacts(run.info.run_id, client, work_dir)
 
@@ -280,9 +281,8 @@ def main(args: HpoArgs):
     
 
     print(f"Prepping Data...")
-    data_manager = DataManager(args, work_dir=work_dir)
-    data_manager.prepare_train_data()
-    data_manager.prepare_inf_data()
+    data_manager = DataManager(work_dir=work_dir)
+    data_manager.prepare_train_data(start=args.start, end=args.end, aggregate=args.aggregate, returns=args.returns)
 
     if args.study_name == '': # Uses the default study name
         study_name = f"{llm_model.lower()}_study"

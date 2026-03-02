@@ -72,7 +72,10 @@ class PipelineRunner:
         self.work_dir.args.volatility = target == "volatility"
 
         data_manager = DataManager.current()
-        data_manager.prepare_inf_data()
+        data_manager.prepare_inf_data(inf_start_date=self.work_dir.args.inf_start,
+                                    inf_end_date=self.work_dir.args.inf_end, 
+                                    aggregate=self.work_dir.args.aggregate, 
+                                    returns=self.work_dir.args.returns)
 
         inf_args = argparse.Namespace()
         inf_args.model_id = run_id
