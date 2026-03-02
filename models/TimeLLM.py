@@ -12,6 +12,10 @@ from utils.tools import load_content
 
 transformers.logging.set_verbosity_error()
 
+import logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
 
 class FlattenHead(nn.Module):
     """
@@ -334,11 +338,11 @@ class Model(nn.Module):
         output = output.permute(0, 2, 1).contiguous()  # [B, pred_len, n_vars]
         
         # Print log odds (raw output values before denormalization)
-        print(f"\n=== Log Odds (Raw Output) ===")
-        print(f"Shape: {output.shape}")
-        print(f"Values:\n{output.detach().cpu()}")
-        print(f"Min: {output.min().item():.6f}, Max: {output.max().item():.6f}, Mean: {output.mean().item():.6f}")
-        print(f"=============================\n")
+        logger.debug(f"\n=== Log Odds (Raw Output) ===")
+        logger.debug(f"Shape: {output.shape}")
+        logger.debug(f"Values:\n{output.detach().cpu()}")
+        logger.debug(f"Min: {output.min().item():.6f}, Max: {output.max().item():.6f}, Mean: {output.mean().item():.6f}")
+        logger.debug(f"=============================\n")
         
         # Denormalize output
         output = self.normalize_layers(output, 'denorm')  # [B, pred_len, n_vars]
