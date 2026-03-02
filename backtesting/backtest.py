@@ -13,6 +13,7 @@ from backtesting.strategies import (
 )
 
 # Strategy configurations
+# confidence_threshold: 0.001 = 0.1% (typical for returns models; 0.01 = 1% was too high, triggered no trades)
 STRATEGIES = {
     'SimpleAI': {
         'class': SimpleAIStrategy,
@@ -209,7 +210,9 @@ class BacktestRunner:
             self.print_db(f"Sortino ratio from trade log: {trade_sortino:.4f}")
         else:
             self.print_db("Could not calculate Sortino ratio from trade log")
-        
+
+        analyzer_results['trade_log'] = trade_log_df
+
         # Store results
         final_value = cerebro.broker.getvalue()
         total_return = (final_value - self.cash) / self.cash * 100
@@ -605,36 +608,43 @@ def parse_args():
     return parser.parse_args()
 
 def main(args_dict, summary_table_path: str = None):
+    """Run backtest. Returns summary DataFrame (empty if optimize/walk_forward)."""
     print("--------------------------------")
     print("BEGINNING BACKTESTING")
     print("--------------------------------")
     print(f"data head: {pd.read_csv(args_dict['data']).head()}")
     runner = BacktestRunner(args_dict['data'], cash=args_dict['cash'], commission=args_dict['commission'], pipeline=args_dict['pipeline'])
-    
+
     if args_dict['optimize']:
         # Optimize specific strategy
         runner.optimize_strategy(args_dict['optimize'])
+        return pd.DataFrame()
 
     elif args_dict['strategy']:
         # Run specific strategy
         runner.run_strategy(args_dict['strategy'])
-        runner.create_summary_table()
-    
+        summary_table = runner.create_summary_table()
+        if runner.pipeline and summary_table_path and not summary_table.empty:
+            summary_table.to_csv(summary_table_path, index=False)
+        return summary_table
+
     elif args_dict['walk_forward']:
         # Walk-forward optimization
-        runner.walk_forward_optimization(args_dict['walk_forward'], 
-                                   train_days=args_dict['train_days'],
-                                   test_days=args_dict['test_days'], 
-                                   step_days=args_dict['step_days'])
+        runner.walk_forward_optimization(args_dict['walk_forward'],
+                                        train_days=args_dict['train_days'],
+                                        test_days=args_dict['test_days'],
+                                        step_days=args_dict['step_days'])
+        return pd.DataFrame()
 
     else:
         # Run all strategies
         runner.run_all_strategies()
         summary_table = runner.create_summary_table()
-        if runner.pipeline:
+        if runner.pipeline and summary_table_path:
             summary_table.to_csv(summary_table_path, index=False)
-        
-        print(summary_table)
+        if not runner.pipeline:
+            print(summary_table)
+        return summary_table
 
 
 if __name__ == "__main__":

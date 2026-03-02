@@ -206,7 +206,7 @@ def objective(trial, args: HpoArgs, data_manager: DataManager, work_dir: WorkDir
         # As well checks if the returns flag is set and converts the data back to candlesticks
         pipeline_runner = PipelineRunner(work_dir)
         if args.INFERENCE:
-            pipeline_runner.run_inference(experiment_name = trial_dict["experiment_name"], run_id = model_id)
+            pipeline_runner.run_inference(data_manager = data_manager, experiment_name = trial_dict["experiment_name"], run_id = model_id)
 
             mlflow_artifacts = MLFlowArtifacts(run.info.run_id, client, work_dir)
 

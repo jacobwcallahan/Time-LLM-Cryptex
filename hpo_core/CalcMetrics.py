@@ -1,8 +1,11 @@
+import mlflow
 from hpo_core.DataManager import DataManager
 from hpo_core.WorkDir import WorkDir
 import pandas as pd
 import numpy as np
 import warnings
+from pathlib import Path
+from typing import Optional
 from hpo_core.HpoArgs import HpoArgs
 from hpo_core.OptunaParams import OptunaParams
 
@@ -14,11 +17,18 @@ class CalcMetrics:
     This must be done after the inference and backtest are completed.
     """
 
-    def __init__(self, args: HpoArgs, data_manager: DataManager, work_dir: WorkDir, optuna_params: OptunaParams):
+    def __init__(
+        self,
+        args: HpoArgs,
+        data_manager: DataManager,
+        work_dir: WorkDir,
+        optuna_params: Optional[OptunaParams] = None,
+        params: Optional[dict] = None,
+    ):
         self.args = args
         self.data_manager = data_manager
         self.work_dir = work_dir
-        self.optuna_params = optuna_params
+        self._params = params if params is not None else (optuna_params.params if optuna_params else {})
 
     def calc_metrics(self) -> dict:
         """
@@ -27,13 +37,15 @@ class CalcMetrics:
         returns:
             dict: A dictionary containing the MDA, MSE, and MAE values.
         """
-        if self.args.INFERENCE:
+        if self.args.INFERENCE and self._params:
             self.mda_vals = self.get_mda_vals(self.work_dir.get_ohlcv_inferenced_path())
-            self.mse_vals = self.get_mse_vals(self.work_dir.get_inferenced_path(), self.optuna_params.params['pred_len'], target = self.optuna_params.params['target'])
-            self.mae_vals = self.get_mae_vals(self.work_dir.get_inferenced_path(), self.optuna_params.params['pred_len'], target = self.optuna_params.params['target'])
+            pred_len = self._params.get("pred_len")
+            target = self._params.get("target", "close")
+            self.mse_vals = self.get_mse_vals(self.work_dir.get_inferenced_path(), pred_len, target=target)
+            self.mae_vals = self.get_mae_vals(self.work_dir.get_inferenced_path(), pred_len, target=target)
             return {"mda": self.mda_vals, "mse": self.mse_vals, "mae": self.mae_vals}
         else:
-            return {}, {}, {}
+            return {}
 
     def get_mda_vals(self, inf_path) -> pd.DataFrame:
         """
@@ -166,5 +178,49 @@ class CalcMetrics:
 
         mae_vals = pd.DataFrame(list[tuple](mae_vals.items()), columns=['prediction', 'value'])
         return mae_vals
+
+    def calc_and_log_to_mlflow(
+        self,
+        client: mlflow.tracking.MlflowClient,
+        run_id: str,
+        log_returns_inference: bool = False,
+        summary_table_path: Optional[Path] = "temp/summary_table.csv",
+        verbose: bool = True,
+    ) -> dict:
+        """
+        Compute metrics and log everything to MLflow.
+
+        Args:
+            client: MLflow client
+            run_id: MLflow run UUID to log artifacts to
+            log_returns_inference: If True, also log ret_inference.csv (when model uses returns)
+            summary_table_path: If provided, log the backtest summary table
+            verbose: If True, print metrics to stdout
+
+        Returns:
+            dict: Computed metrics (mda, mse, mae)
+        """
+        metrics_dict = self.calc_metrics()
+
+        # Write metrics to work_dir and log as artifacts
+        if metrics_dict:
+            for metric_name, data in metrics_dict.items():
+                self.work_dir.write_metrics(metric_name, data)
+                client.log_artifact(run_id=run_id, local_path=str(self.work_dir.metrics_path(metric_name)))
+                if verbose:
+                    print(metric_name)
+                    print(data)
+                    print("--------------------------------")
+
+        # Log inference data (always)
+        client.log_artifact(run_id=run_id, local_path=str(self.work_dir.get_ohlcv_inferenced_path()))
+        if log_returns_inference and self.work_dir.get_ret_inferenced_path().exists():
+            client.log_artifact(run_id=run_id, local_path=str(self.work_dir.get_ret_inferenced_path()))
+
+        # Log summary table if backtest ran
+        if summary_table_path is not None and summary_table_path.exists():
+            client.log_artifact(run_id=run_id, local_path=str(summary_table_path))
+
+        return metrics_dict
 
 

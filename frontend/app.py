@@ -12,11 +12,11 @@ from datetime import datetime
 import sys
 
 from helper_fcns import (
-    start_before_end, 
+    start_before_end,
     end_after_start,
     run_inference_handler,
     check_and_plot_mlflow_inference,
-    run_backtest
+    run_backtest,
 )
 
 
@@ -51,6 +51,19 @@ DEFAULT_CONFIG = {
 }
 
 
+def _to_date_str(val):
+    """Convert Gradio DateTime value (datetime, timestamp, or str) to YYYY-MM-DD."""
+    if val is None:
+        return None
+    if isinstance(val, (int, float)):
+        return datetime.fromtimestamp(val).strftime("%Y-%m-%d")
+    if hasattr(val, "strftime"):
+        return val.strftime("%Y-%m-%d")
+    if isinstance(val, str) and len(val) >= 10:
+        return val[:10]
+    return str(val) if val else None
+
+
 def build_command(
     # HPO Arguments
     gpu, study_name, granularity, start_date, end_date,
@@ -81,13 +94,13 @@ def build_command(
     if granularity:
         cmd_parts.extend(["--granularity", granularity])
     if start_date:
-        cmd_parts.extend(["--start", str(datetime.fromtimestamp(start_date).strftime("%Y-%m-%d"))])
+        cmd_parts.extend(["--start", str(_to_date_str(start_date))])
     if end_date:
-        cmd_parts.extend(["--end", str(datetime.fromtimestamp(end_date).strftime("%Y-%m-%d"))])
+        cmd_parts.extend(["--end", str(_to_date_str(end_date))])
     if inf_start:
-        cmd_parts.extend(["--inf_start", str(datetime.fromtimestamp(inf_start).strftime("%Y-%m-%d"))])
+        cmd_parts.extend(["--inf_start", str(_to_date_str(inf_start))])
     if inf_end:
-        cmd_parts.extend(["--inf_end", str(datetime.fromtimestamp(inf_end).strftime("%Y-%m-%d"))])
+        cmd_parts.extend(["--inf_end", str(_to_date_str(inf_end))])
     if data_path:
         cmd_parts.extend(["--data_path", data_path])
     if returns:
@@ -240,7 +253,8 @@ def generate_yaml_config(
 
 def save_prompt(prompt, filename="CRYPTEX.txt"):
     """Save the prompt to the prompt bank."""
-    prompt_path = Path("dataset/prompt_bank") / filename
+    project_root = Path(__file__).parent.parent
+    prompt_path = project_root / "dataset" / "prompt_bank" / filename
     prompt_path.parent.mkdir(parents=True, exist_ok=True)
     with open(prompt_path, "w") as f:
         f.write(prompt)
@@ -249,7 +263,8 @@ def save_prompt(prompt, filename="CRYPTEX.txt"):
 
 def save_yaml_config(yaml_content, filename):
     """Save YAML configuration to file."""
-    config_path = Path("config") / filename
+    project_root = Path(__file__).parent.parent
+    config_path = project_root / "config" / filename
     config_path.parent.mkdir(parents=True, exist_ok=True)
     with open(config_path, "w") as f:
         f.write(yaml_content)
@@ -258,6 +273,9 @@ def save_yaml_config(yaml_content, filename):
 
 def run_hpo(command):
     """Execute the HPO command with streaming output."""
+    if not command or not str(command).strip():
+        yield "Error: No command to run. Click 'Generate Command' first, or ensure the command box has content."
+        return
     try:
         project_root = Path(__file__).parent.parent
         process = subprocess.Popen(
@@ -326,7 +344,9 @@ with gr.Blocks(title="Time-LLM-Cryptex", theme=gr.themes.Citrus()) as app:
                             yaml_file = gr.Textbox(label="YAML Config File", value="optuna_vars.yaml", info="Config file in ./config/")
 
                             start_date.change(start_before_end, inputs=[start_date, end_date], outputs=start_date)
+                            end_date.change(end_after_start, inputs=[end_date, start_date], outputs=end_date)
                             train_inf_start.change(start_before_end, inputs=[train_inf_start, train_inf_end], outputs=train_inf_start)
+                            train_inf_end.change(end_after_start, inputs=[train_inf_end, train_inf_start], outputs=train_inf_end)
                     
                     with gr.Row():
                         returns = gr.Checkbox(label="Returns", value=False, info="Train on returns")
@@ -650,18 +670,16 @@ with gr.Blocks(title="Time-LLM-Cryptex", theme=gr.themes.Citrus()) as app:
             
             run_inference_btn = gr.Button("Run Inference", variant="primary")
             inference_output = gr.Textbox(label="Inference Output", lines=15, interactive=False)
-    
+
             run_inference_btn.click(
                 fn=run_inference_handler,
                 inputs=[inf_model_name, inf_experiment_name, inf_custom_dataset_path, inf_granularity, inf_aggregate, inf_start_date, inf_end_date],
-                outputs=inference_output
+                outputs=inference_output,
             )
-            
 
             gr.Markdown("---")
             gr.Markdown("### Load Inference from MLflow")
-            gr.Markdown("Check if inference data exists in MLflow for a given run and visualize it as a candlestick chart with prediction overlay.")
-            
+            gr.Markdown("Visualize inference data and metrics for a specific prediction horizon. The plot and metrics both use the selected horizon.")
             with gr.Row():
                 mlflow_experiment_name = gr.Textbox(
                     label="Experiment Name",
@@ -678,18 +696,23 @@ with gr.Blocks(title="Time-LLM-Cryptex", theme=gr.themes.Citrus()) as app:
                     value=1,
                     minimum=1,
                     step=1,
-                    info="Number of steps ahead to plot (1 = 1 ahead, 2 = 2 ahead, etc.)"
+                    info="Steps ahead (1 = 1 step, 2 = 2 steps). Plot and metrics use this."
                 )
-                check_mlflow_btn = gr.Button("Check & Plot Inference", variant="secondary")
-                
-            
+            check_mlflow_btn = gr.Button("Check & Plot Inference", variant="primary")
+
             mlflow_status = gr.Textbox(label="Status", interactive=False, lines=3)
             mlflow_inference_plot = gr.Plot(label="Inference Data Visualization (Candlestick + Prediction)")
-            
+
+            gr.Markdown("**Metrics for selected prediction horizon** (from mae_metrics.csv, mse_metrics.csv, mda_metrics.csv)")
+            with gr.Row():
+                inf_mae = gr.Number(label="MAE (Mean Absolute Error)", interactive=False)
+                inf_mse = gr.Number(label="MSE (Mean Squared Error)", interactive=False)
+                inf_mda = gr.Number(label="MDA (Mean Directional Accuracy)", interactive=False)
+
             check_mlflow_btn.click(
                 fn=check_and_plot_mlflow_inference,
                 inputs=[mlflow_experiment_name, mlflow_run_id, mlflow_pred_horizon],
-                outputs=[mlflow_status, mlflow_inference_plot]
+                outputs=[mlflow_status, mlflow_inference_plot, inf_mae, inf_mse, inf_mda],
             )
         
         # =====================================================================
@@ -697,19 +720,24 @@ with gr.Blocks(title="Time-LLM-Cryptex", theme=gr.themes.Citrus()) as app:
         # =====================================================================
         with gr.TabItem("Backtesting", id="backtesting"):
             gr.Markdown("## Backtesting")
-            gr.Markdown("Evaluate model predictions with trading strategies and performance metrics.")
+            gr.Markdown("Evaluate model predictions with trading strategies. Inference data is pulled from MLflow (ohlcv_inference.csv artifact).")
             
             with gr.Row():
                 with gr.Column():
-                    bt_inference_path = gr.Textbox(
-                        label="Inference Results Path",
-                        value="backtesting/data/inference.csv",
-                        info="Path to inference results CSV"
+                    bt_experiment_name = gr.Textbox(
+                        label="Experiment Name",
+                        placeholder="e.g. my_experiment",
+                        info="MLflow experiment name"
+                    )
+                    bt_run_id = gr.Textbox(
+                        label="Run ID",
+                        placeholder="e.g. trial_abc123 or run UUID",
+                        info="MLflow run ID or run name"
                     )
                     bt_strategy = gr.Dropdown(
                         label="Trading Strategy",
-                        choices=["simple_ai", "threshold", "momentum", "mean_reversion"],
-                        value="simple_ai",
+                        choices=["SimpleAI", "SLTP", "MomentumAI", "RSIAI", "BollingerAI", "MeanReversionAI", "TrendFollowingAI"],
+                        value="SimpleAI",
                         info="Select backtesting strategy"
                     )
                     bt_initial_capital = gr.Number(
@@ -738,27 +766,28 @@ with gr.Blocks(title="Time-LLM-Cryptex", theme=gr.themes.Citrus()) as app:
                     )
             
             run_backtest_btn = gr.Button("Run Backtest", variant="primary")
-            backtest_output = gr.Textbox(label="Backtest Output", lines=10, interactive=False)
+
+            gr.Markdown("### Backtest Chart (Buys & Sells)")
+            bt_equity_plot = gr.Plot(label="Price Chart with Buy/Sell Signals")
+
+            gr.Markdown("### Backtest Summary")
+            backtest_output = gr.Textbox(label="Status / Summary", lines=4, interactive=False)
+
+            gr.Markdown("### Performance Metrics")
+            with gr.Row():
+                bt_total_return = gr.Number(label="Total Return (%)", interactive=False)
+                bt_sharpe_ratio = gr.Number(label="Sharpe Ratio", interactive=False)
+                bt_max_drawdown = gr.Number(label="Max Drawdown (%)", interactive=False)
+            with gr.Row():
+                bt_win_rate = gr.Number(label="Win Rate (%)", interactive=False)
+                bt_num_trades = gr.Number(label="Number of Trades", interactive=False)
+                bt_profit_factor = gr.Number(label="Profit Factor", interactive=False)
 
             run_backtest_btn.click(
                 fn=run_backtest,
-                inputs=[bt_inference_path, bt_strategy, bt_initial_capital, bt_start_date, bt_end_date, bt_threshold],
-                outputs=backtest_output
-            )   
-            
-            gr.Markdown("### Performance Metrics")
-            with gr.Row():
-                with gr.Column():
-                    bt_total_return = gr.Number(label="Total Return (%)", interactive=False)
-                    bt_sharpe_ratio = gr.Number(label="Sharpe Ratio", interactive=False)
-                    bt_max_drawdown = gr.Number(label="Max Drawdown (%)", interactive=False)
-                with gr.Column():
-                    bt_win_rate = gr.Number(label="Win Rate (%)", interactive=False)
-                    bt_num_trades = gr.Number(label="Number of Trades", interactive=False)
-                    bt_profit_factor = gr.Number(label="Profit Factor", interactive=False)
-            
-            gr.Markdown("### Equity Curve")
-            bt_equity_plot = gr.Plot(label="Portfolio Value Over Time")
+                inputs=[bt_experiment_name, bt_run_id, bt_strategy, bt_initial_capital, bt_start_date, bt_end_date, bt_threshold],
+                outputs=[bt_equity_plot, backtest_output, bt_total_return, bt_sharpe_ratio, bt_max_drawdown, bt_win_rate, bt_num_trades, bt_profit_factor],
+            )
 
 
 if __name__ == "__main__":

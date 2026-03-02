@@ -7,7 +7,7 @@ class BaseAIStrategy(bt.Strategy):
     
     params = (
         ('prediction_horizon', 1), # Which prediction to use (1, ..., `pred_len` days ahead)
-        ('confidence_threshold', 0.01), # Minimum price change % to trigger trade
+        ('confidence_threshold', 0.001), # Minimum price change % to trigger trade (0.001 = 0.1%, typical for returns models)
         ('position_size', 0.99),  # Percent of available cash to use
     )
     

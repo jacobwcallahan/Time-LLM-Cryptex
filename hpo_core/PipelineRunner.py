@@ -6,6 +6,7 @@ from run_main import main as run_training_main
 from infra.TrainConfig import TrainConfig
 from hpo_core.DataManager import DataManager
 import os
+import mlflow
 
 MLFLOW_TRACKING_URI = os.environ["MLFLOW_TRACKING_URI"]
 
@@ -55,38 +56,103 @@ class PipelineRunner:
         
         run_training_main(training_args)
 
-    def run_inference(self, data_manager: DataManager, experiment_name: str, run_id: str):
+    def run_inference(self, experiment_name: str, run_id: str):
         """
-        Runs the inference pipeline.
+        Runs the inference pipeline. Requires DataManager.current() to be set.
 
         Args:
-            data_manager (DataManager): The data manager object.
-            experiment_name (str): The experiment name.
-            run_id (str): The run ID.
+            experiment_name (str): The MLflow experiment name.
+            run_id (str): The MLflow run name / model ID to load.
         """
+        # Align data format with model: fetch target from MLflow and set returns/volatility
+        target = self.get_target_from_mlflow(
+            run_id, experiment_name=experiment_name, tracking_uri=MLFLOW_TRACKING_URI
+        )
+        self.work_dir.args.returns = target == "returns"
+        self.work_dir.args.volatility = target == "volatility"
 
-        # TODO Make this change the dates of the data. As well make it check if the data is already prepared.
-
+        data_manager = DataManager.current()
         data_manager.prepare_inf_data()
-        # TODO: Make this a InferenceConfig object
-        inf_args = argparse.ArgumentParser()
+
+        inf_args = argparse.Namespace()
         inf_args.model_id = run_id
         inf_args.llm_model = "LLAMA3.1"
-        inf_args.data_path = self.work_dir.get_inf_data_path()
+        inf_args.data_path = str(self.work_dir.get_inf_data_path())
         inf_args.mlflow_tracking_uri = MLFLOW_TRACKING_URI
         inf_args.save_path = self.work_dir.get_work_dir_path()
         inf_args.experiment_name = experiment_name
 
         run_inference_main(inf_args)
 
-    def run_backtest(self, pipeline: bool = False):
+        # Post-process: convert returns to OHLCV for backtest, or copy inference to ohlcv path
+        # (volatility target: no convert_back; backtest may need separate handling)
+        if self.work_dir.args.returns:
+            inferenced = data_manager.work_dir.get_inferenced_data()
+            pred_cols = [c for c in inferenced.columns if "_predicted_" in c and c.split("_")[-1].isdigit()]
+            pred_len = len(pred_cols)
+            ohlcv_inf = data_manager.convert_back_to_candlesticks(
+                pred_len,
+                self.work_dir.get_org_ohlcv_inf_data(),
+                inferenced,
+            )
+            self.work_dir.write_ohlcv_inferenced_data(ohlcv_inf)
+            self.work_dir.rename_ret_inferenced_data()
+        else:
+            self.work_dir.rename_ohlcv_inferenced_data()
+
+    def run_backtest(
+        self,
+        pipeline: bool = False,
+        data_path: str = None,
+        strategy: str = None,
+        cash: float = None,
+    ):
+        """
+        Run backtest on inference results.
+
+        Args:
+            pipeline: If True, suppress console output.
+            data_path: Override path to inference CSV. Default: work_dir ohlcv_inference.
+            strategy: Strategy name to run (e.g. 'SimpleAI'). None = run all.
+            cash: Initial capital. Default: 100000.
+
+        Returns:
+            Summary DataFrame from backtest.
+        """
+        data = data_path if data_path else str(self.work_dir.get_ohlcv_inferenced_path())
         backtest_args = {
-            "data": self.work_dir.get_ohlcv_inferenced_path(),
-            "cash": 100000,
+            "data": data,
+            "cash": cash if cash is not None else 100000,
             "commission": 0.001,
             "pipeline": pipeline,
             "optimize": False,
-            "strategy": None,
+            "strategy": strategy,
             "walk_forward": None,
-            }
-        backtest_main(backtest_args, summary_table_path = self.work_dir.summary_table_path())
+        }
+        return backtest_main(
+            backtest_args,
+            summary_table_path=str(self.work_dir.summary_table_path()),
+        )
+
+    def get_target_from_mlflow(self, model_id: str, experiment_name: str = None, llm_model: str = "LLAMA3.1", tracking_uri: str = None) -> str:
+        """Fetch the target param from an MLflow run. Used by pipeline to align inference data format with model."""
+        _, params = self.get_mlflow_run_info(model_id, experiment_name, llm_model, tracking_uri)
+        return params.get("target", "close")
+
+    def get_mlflow_run_info(self, model_id: str, experiment_name: str = None, llm_model: str = "LLAMA3.1", tracking_uri: str = None):
+        """Fetch MLflow run UUID and params. Returns (run_id_uuid, params_dict)."""
+        if tracking_uri:
+            mlflow.set_tracking_uri(tracking_uri)
+        client = mlflow.tracking.MlflowClient()
+        exp = client.get_experiment_by_name(experiment_name) if experiment_name else client.get_experiment_by_name(llm_model)
+        runs = client.search_runs([exp.experiment_id], f"tags.mlflow.runName = '{model_id}'")
+        if not runs:
+            raise ValueError(f"No MLflow run found with name '{model_id}' in experiment '{experiment_name or llm_model}'")
+        run = runs[0]
+        params = dict(run.data.params)
+        # Cast pred_len to int for CalcMetrics
+        if "pred_len" in params:
+            params["pred_len"] = int(params["pred_len"])
+        return run.info.run_id, params
+
+

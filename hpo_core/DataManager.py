@@ -3,6 +3,7 @@ This class is responsible for managing the train and inference data.
 """
 
 from pathlib import Path
+from typing import Optional
 import pandas as pd
 from datetime import datetime
 import warnings
@@ -11,61 +12,11 @@ import numpy as np
 from hpo_core.HpoArgs import HpoArgs
 import os
 
-
 class DataManager:
-    """
-    This class is responsible for managing the train and inference data.
+    _current = None
 
-    functions: 
-        prepare_data: Prepares the data for training and inference.
-        check_date_validity: Checks the validity of the start and end dates.
-        aggregate_data: Aggregates the data from the original granularity to the specified granularity.
-        convert_to_returns: Converts the data to returns.
-        convert_back_to_candlesticks: Converts the returns data back to candlesticks.
-
-    args:
-        args: HpoArgs object
-
-    raises:
-        ValueError: If the data path is not a valid file.
-        ValueError: If the start date is before the first date of the dataset.
-        ValueError: If the end date is after the last date of the dataset.
-
-    attributes:
-        data: DataFrame containing the training data
-        inf_data: DataFrame containing the inference data
-        data_path: Path to the data file
-        full_data: DataFrame containing the full data
-        first_time: Timestamp of the first date of the dataset
-        last_time: Timestamp of the last date of the dataset
-        granularity: Granularity of the data
-        start_date: Timestamp of the start date
-        end_date: Timestamp of the end date
-        inf_start_date: Timestamp of the inference start date
-        inf_end_date: Timestamp of the inference end date
-        returns: Boolean indicating if the data is returns
-        aggregate: Integer indicating the aggregate period
-        INFERENCE: Boolean indicating if inference is enabled
-        DATASET_PATH: Path to the dataset
-
-
-    """
-
-    
-    def __init__(self, args: HpoArgs, work_dir: WorkDir):
-        self.args = args
+    def __init__(self, work_dir: WorkDir):
         self.work_dir = work_dir
-
-
-        self.start_date = None
-        self.end_date = None
-
-        self.inf_start_date = None
-        self.inf_end_date = None
-
-        self.aggregate = args.aggregate
-
-        self.args.returns = args.returns
 
         self.full_data = work_dir.get_full_data()
 
@@ -74,106 +25,151 @@ class DataManager:
         
         self.data = None
         self.inf_data = None
-        self.check_date_validity()
 
-    def prepare_train_data(self):
+        DataManager._current = self
+
+    
+    @classmethod
+    def current(cls) -> "DataManager":
+        if cls._current is None:
+            raise RuntimeError("DataManager not initialized. Call DataManager(work_dir) first.")
+        return cls._current
+
+        
+    def prepare_train_data(self, start: str, end: str, aggregate: int, returns: bool):
         """
         Prepares the data for training and inference.
         """
-        self.data = self.full_data[(self.full_data['timestamp'] >= self.start_date) & (self.full_data['timestamp'] <= self.end_date)]
+        start_ts, end_ts = self.check_date_validity(start, end)
+        self.data = self.full_data[(self.full_data['timestamp'] >= start_ts) & (self.full_data['timestamp'] <= end_ts)]
 
-        self.data = self.aggregate_data(self.data, self.aggregate)
+        self.data = self.aggregate_data(self.data, aggregate)
 
         # Write the OHLCV train data to the work directory
         self.work_dir.write_ohlcv_train_data(self.data)
 
         # If the data is returns, convert it to returns and save it
-        if self.args.returns:
+        if returns:
             self.data = self.convert_to_returns(self.data)
             self.work_dir.write_ret_train_data(self.data)
 
         self.work_dir.write_train_data(self.data)
 
-    def prepare_inf_data(self):
-        if not self.args.INFERENCE:
-            warnings.warn("Inference data is not prepared. Please run the prepare_data function first.")
-            return
+    def prepare_inf_data(self, 
+                        inf_start_date: Optional[str] = None, 
+                        inf_end_date: Optional[str] = None, 
+                        aggregate: Optional[int] = None, 
+                        returns: Optional[bool] = None):
+        """
+        Prepare inference data. When all params are None, reads from work_dir.args.
+        """
+        args = self.work_dir.args
+        inf_start_date = inf_start_date if inf_start_date is not None else args.inf_start
+        inf_end_date = inf_end_date if inf_end_date is not None else args.inf_end
+        aggregate = aggregate if aggregate is not None else (1 if args.no_inf_aggregate else args.aggregate)
+        returns = returns if returns is not None else args.returns
 
-        self.inf_start_date = datetime.strptime(self.args.inf_start, '%Y-%m-%d').timestamp()
-        self.inf_end_date = datetime.strptime(self.args.inf_end, '%Y-%m-%d').timestamp()
+        # Use full dataset range when dates not set (standalone inference without training)
+        if inf_start_date is None:
+            inf_start_date = datetime.fromtimestamp(self.first_time).strftime('%Y-%m-%d')
+            warnings.warn(f"No inf_start provided. Using first date of dataset: {inf_start_date}")
+        if inf_end_date is None:
+            inf_end_date = datetime.fromtimestamp(self.last_time).strftime('%Y-%m-%d')
+            warnings.warn(f"No inf_end provided. Using last date of dataset: {inf_end_date}")
+
+        self.inf_start_date = datetime.strptime(inf_start_date, '%Y-%m-%d').timestamp()
+        self.inf_end_date = datetime.strptime(inf_end_date, '%Y-%m-%d').timestamp()
             
         self.inf_data = self.full_data[(self.full_data['timestamp'] >= self.inf_start_date) & (self.full_data['timestamp'] <= self.inf_end_date)]
-        self.inf_data = self.aggregate_data(self.inf_data, self.aggregate)
+        self.inf_data = self.aggregate_data(self.inf_data, aggregate)
 
         self.work_dir.write_org_ohlcv_inf_data(self.inf_data)
-        if self.args.returns:
+        if returns:
             self.inf_data = self.convert_to_returns(self.inf_data)
             self.work_dir.write_ret_inf_data(self.inf_data)
-
+        elif getattr(args, "volatility", False):
+            self.inf_data = self.convert_to_volatility(self.inf_data)
         self.work_dir.write_inf_data(self.inf_data) 
 
-    def check_date_validity(self):
+    
+    def check_date_validity(self, start: Optional[str], end: Optional[str]):
         """
-        Checks the validity of the start and end dates.
+        Checks the validity of the start and end dates for either the training data or the inference data.
         """
-
-        if self.args.start is None:
-            self.start_date = self.first_time
+        if start is None:
+            start = self.first_time
             warnings.warn(f"No start date provided. Using the first date of the dataset: {datetime.fromtimestamp(self.first_time).date()}")
         else:
-            self.start_date = datetime.strptime(self.args.start, '%Y-%m-%d').timestamp()
-            if self.start_date < self.first_time:
-                warnings.warn(f"The start date given ({self.start_date}) is before the first date of the dataset. Using the first date of the dataset: {datetime.fromtimestamp(self.first_time).date()}\n")
-                self.start_date = self.first_time
+            start = datetime.strptime(start, '%Y-%m-%d').timestamp()
 
-        if self.args.end is None:
-            self.end_date = self.last_time
+        if end is None:
+            end = self.last_time
             warnings.warn(f"No end date provided. Using the last date of the dataset: {datetime.fromtimestamp(self.last_time).date()}\n")
         else:
-            self.end_date = datetime.strptime(self.args.end, '%Y-%m-%d').timestamp()
-            if self.end_date > self.last_time:
-                warnings.warn(f"The end date given ({self.end_date}) is after the last date of the dataset. Using the last date of the dataset: {datetime.fromtimestamp(self.last_time).date()}\n")
-                self.end_date = self.last_time
+            end = datetime.strptime(end, '%Y-%m-%d').timestamp()
+        
+        if start > end:
+            warnings.warn(f"The start date given ({start}) is after the end date given ({end}). Using the last date of the dataset: {datetime.fromtimestamp(self.last_time).date()} as the end date.\n")
+            end = self.last_time
 
-        if self.start_date is not None and self.end_date is not None:
-            if self.start_date > self.end_date:
-                warnings.warn(f"The start date given ({self.start_date}) is after the end date given ({self.end_date}). Using the last date of the dataset: {datetime.fromtimestamp(self.last_time).date()} as the end date.\n")
-                self.end_date = self.last_time
+        if start < self.first_time:
+            warnings.warn(f"The start date given ({start}) is before the first date of the dataset. Using the first date of the dataset: {datetime.fromtimestamp(self.first_time).date()}\n")
+            start = self.first_time
+        elif start > self.last_time:
+            warnings.warn(f"The start date given ({start}) is after the last date of the dataset. Using the first date of the dataset: {datetime.fromtimestamp(self.first_time).date()}\n")
+            start = self.first_time
 
-        if self.args.INFERENCE:
-            if self.args.inf_start is not None and self.args.inf_end is not None:
-                self.inf_start_date = datetime.strptime(self.args.inf_start, '%Y-%m-%d').timestamp()
-                self.inf_end_date = datetime.strptime(self.args.inf_end, '%Y-%m-%d').timestamp()
-                if self.inf_start_date > self.inf_end_date:
-                    warnings.warn(f"The inference start date given ({self.inf_start_date}) is after the inference end date given ({self.inf_end_date}). Using the last date of the dataset: {datetime.fromtimestamp(self.last_time).date()} as the inference end date.\n")
-                    self.inf_end_date = self.last_time
-            else:
-                if self.args.inf_start is not None:
-                    self.inf_start_date = datetime.strptime(self.args.inf_start, '%Y-%m-%d').timestamp()
-                    if self.inf_start_date < self.first_time:
-                        warnings.warn(f"The inference start date given ({self.inf_start_date}) is before the first date of the dataset. Using the first date of the dataset: {datetime.fromtimestamp(self.first_time).date()}\n")
-                        self.inf_start_date = self.first_time
-                if self.args.inf_end is not None:
-                    self.inf_end_date = datetime.strptime(self.args.inf_end, '%Y-%m-%d').timestamp()
-                    if self.inf_end_date > self.last_time:
-                        warnings.warn(f"The inference end date given ({self.inf_end_date}) is after the last date of the dataset. Using the last date of the dataset: {datetime.fromtimestamp(self.last_time).date()}\n")
-                        self.inf_end_date = self.last_time
+        if end > self.last_time:
+            warnings.warn(f"The end date given ({end}) is after the last date of the dataset. Using the last date of the dataset: {datetime.fromtimestamp(self.last_time).date()}\n")
+            end = self.last_time    
+        elif end < self.first_time:
+            warnings.warn(f"The end date given ({end}) is before the first date of the dataset. Using the last date of the dataset: {datetime.fromtimestamp(self.last_time).date()}\n")
+            end = self.last_time
 
-            if self.start_date is not None and self.end_date is not None and self.inf_start_date is not None and self.inf_end_date is not None:
-                if self.end_date > self.inf_start_date:
-                    warnings.warn(f"The end date given ({self.end_date}) is after the inference start date given ({self.inf_start_date}). Using the end date as the inference start date.\n")
-                    self.inf_start_date = self.end_date
+        return start, end
 
-            if self.end_date is not None and self.inf_start_date is None:
-                warnings.warn(f"No inference start date provided. Using the end date as the inference start date: {datetime.fromtimestamp(self.end_date).date()}\n")
-                self.inf_start_date = self.end_date
+    def check_date_compatibility(self, start: Optional[str], end: Optional[str], inf_start: Optional[str] = None, inf_end: Optional[str] = None):
+        """
+        Checks the compatibility of the start and end dates for the training data and the inference data.
+        Returns (start_ts, end_ts, inf_start_ts, inf_end_ts) as unix timestamps.
+        """
+        def _to_ts(s):
+            if s is None:
+                return None
+            return s if isinstance(s, (int, float)) else datetime.strptime(s, '%Y-%m-%d').timestamp()
 
-            if self.inf_end_date is not None and self.inf_start_date is None:
-                warnings.warn(f"No inference end date provided. Using the last date of the dataset as the inference end date: {datetime.fromtimestamp(self.last_time).date()}\n")
-                self.inf_end_date = self.last_time
+        start_ts = _to_ts(start)
+        end_ts = _to_ts(end)
+        inf_start_ts = _to_ts(inf_start)
+        inf_end_ts = _to_ts(inf_end)
 
-            if self.end_date is None and self.inf_start_date is None:
-                raise ValueError("No start or end date provided for the training data and no start date provided for the inference data.")
+        if start_ts is not None and end_ts is not None:
+            if start_ts > end_ts:
+                warnings.warn(f"The start date given ({start}) is after the end date given ({end}). Using the last date of the dataset: {datetime.fromtimestamp(self.last_time).date()} as the end date.\n")
+                end_ts = self.last_time
+
+        if inf_start_ts is not None and inf_end_ts is not None:
+            if inf_start_ts > inf_end_ts:
+                warnings.warn(f"The inference start date given ({inf_start}) is after the inference end date given ({inf_end}). Using the last date of the dataset: {datetime.fromtimestamp(self.last_time).date()} as the inference end date.\n")
+                inf_end_ts = self.last_time
+
+        if start_ts is not None and end_ts is not None and inf_start_ts is not None and inf_end_ts is not None:
+            if end_ts > inf_start_ts:
+                warnings.warn(f"The end date given ({end}) is after the inference start date given ({inf_start}). Using the end date as the inference start date.\n")
+                inf_start_ts = end_ts
+
+        if end_ts is not None and inf_start_ts is None:
+            warnings.warn(f"No inference start date provided. Using the end date as the inference start date: {datetime.fromtimestamp(end_ts).date()}\n")
+            inf_start_ts = end_ts
+
+        if inf_end_ts is not None and inf_start_ts is None:
+            warnings.warn(f"No inference end date provided. Using the last date of the dataset as the inference end date: {datetime.fromtimestamp(self.last_time).date()}\n")
+            inf_end_ts = self.last_time
+
+        if end_ts is None and inf_start_ts is None:
+            raise ValueError("No start or end date provided for the training data and no start date provided for the inference data.")
+
+        return start_ts, end_ts, inf_start_ts, inf_end_ts
 
 
     def aggregate_data(self, data: pd.DataFrame, aggregate: int):
@@ -212,7 +208,11 @@ class DataManager:
 
         return out
 
-    def convert_to_returns(self, data: pd.DataFrame, keep_high_low=False, keep_volume=True, log_returns=False):
+    def convert_to_returns(self, 
+                           data: pd.DataFrame, 
+                           keep_high_low: bool = False, 
+                           keep_volume: bool = True, 
+                           log_returns: bool = False):
         """
         Convert data to returns.
 
@@ -256,34 +256,33 @@ class DataManager:
 
     def convert_back_to_candlesticks(self, num_predictions: int, org_inf_data: pd.DataFrame, processed_inf_data: pd.DataFrame, custom_save_path=None):
         """
-        Convert inferenced returns data back to candlesticks. This is used to backtest the model.
-        Writes the inferenced data to the inferenced data path.
+        Convert inferenced returns data back to OHLCV (close_predicted_*) for backtesting.
+        Backtest requires OHLCV format; it cannot use returns directly.
 
-        args:
-            num_predictions: number of predictions to convert back to candlesticks
-            custom_save_path: optional path to save the result
+        For horizon 1: pred_close[i] = close[i-1] * (1 + returns_predicted_1[i])
         """
-
-        result = org_inf_data
+        result = org_inf_data.copy()
         predicted_returns = processed_inf_data.copy()
 
-        # Get the last known close price before predictions start
-        try:
-            last_close = result.loc[result.index[predicted_returns['returns_predicted_1'].first_valid_index()-1], 'close']
-        except Exception as e:
-            print(f"Error getting last close price: {e}\n")
-            raise ValueError(f"Error getting last close price: {e}")
+        # Align: ensure integer index for .shift
+        result = result.reset_index(drop=True)
+        predicted_returns = predicted_returns.reset_index(drop=True)
 
-        for i in range(1, num_predictions+1):  
+        if 'close' not in result.columns:
+            raise ValueError("org_inf_data must have 'close' column for OHLCV conversion")
+
+        for i in range(1, num_predictions + 1):
             col = f'returns_predicted_{i}'
-            if col in predicted_returns.columns:
-                # Calculate cumulative returns 
-                pred_close = last_close * (1 + predicted_returns[col])
-                # Rename column
-                result[f'close_predicted_{i}'] = pred_close
+            if col not in predicted_returns.columns:
+                continue
+            # Horizon 1: pred_close = prev_close * (1 + return). Use per-row prev close, not scalar.
+            prev_close = result['close'].shift(1)
+            pred_close = prev_close * (1 + predicted_returns[col])
+            result[f'close_predicted_{i}'] = pred_close
 
-        # Convert unix timestamp to UTC datetime
-        result["timestamp"] = pd.to_datetime(result["timestamp"], unit='s', utc=True)
+        # Convert unix timestamp to UTC datetime for backtest
+        if 'timestamp' in result.columns:
+            result["timestamp"] = pd.to_datetime(result["timestamp"], unit='s', utc=True)
 
         if custom_save_path is not None:
             result.to_csv(custom_save_path, index=False)
@@ -291,12 +290,13 @@ class DataManager:
         return result
 
 
-    def check_data_paths(self) -> bool:
+    def check_data_paths(self, inference: bool = False, returns: bool = False) -> bool:
         """
         Checks if the data paths exist.
 
         args:
-            self: DataManager object
+            inference: If True, also checks inference data paths.
+            returns: If True and inference is True, also checks returns inference data path.
         returns:
             True if the data paths exist, False otherwise
         """
@@ -305,11 +305,11 @@ class DataManager:
 
         if not os.path.exists(self.work_dir.get_train_data_path()):
             raise ValueError(f"Train data path {self.work_dir.get_train_data_path()} does not exist.")
-        
-        if self.args.INFERENCE:
+
+        if inference:
             if not os.path.exists(self.work_dir.get_org_ohlcv_inf_data_path()):
                 raise ValueError(f"Original inference data path {self.work_dir.get_org_ohlcv_inf_data_path()} does not exist.")
-            if self.args.returns:
+            if returns:
                 if not os.path.exists(self.work_dir.get_ret_inf_data_path()):
                     raise ValueError(f"Returns inference data path {self.work_dir.get_ret_inf_data_path()} does not exist.")
         return True

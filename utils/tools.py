@@ -2,8 +2,11 @@ import numpy as np
 import torch
 import matplotlib.pyplot as plt
 import shutil
+from pathlib import Path
 
 from tqdm import tqdm
+
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 plt.switch_backend('agg')
 
@@ -155,6 +158,7 @@ def test(args, accelerator, model, train_loader, vali_loader, criterion):
 
 def load_content(args):
     file = args.data
-    with open(f'./dataset/prompt_bank/{file}.txt', 'r') as f:
+    prompt_path = _PROJECT_ROOT / "dataset" / "prompt_bank" / f"{file}.txt"
+    with open(prompt_path, "r") as f:
         content = f.read()
     return content
