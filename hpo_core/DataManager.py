@@ -5,7 +5,7 @@ This class is responsible for managing the train and inference data.
 from pathlib import Path
 from typing import Optional
 import pandas as pd
-from datetime import datetime
+from datetime import datetime, timezone
 import warnings
 from hpo_core.WorkDir import WorkDir
 import numpy as np
@@ -70,17 +70,25 @@ class DataManager:
         returns = returns if returns is not None else args.returns
 
         # Use full dataset range when dates not set (standalone inference without training)
-        if inf_start_date is None:
-            inf_start_date = datetime.fromtimestamp(self.first_time).strftime('%Y-%m-%d')
-            warnings.warn(f"No inf_start provided. Using first date of dataset: {inf_start_date}")
-        if inf_end_date is None:
-            inf_end_date = datetime.fromtimestamp(self.last_time).strftime('%Y-%m-%d')
-            warnings.warn(f"No inf_end provided. Using last date of dataset: {inf_end_date}")
+        if inf_start_date is None and inf_end_date is None:
+            # When both are None, use actual min/max from data to avoid any date conversion issues
+            ts_min = self.full_data['timestamp'].min()
+            ts_max = self.full_data['timestamp'].max()
+            self.inf_start_date = float(ts_min)
+            self.inf_end_date = float(ts_max)
+            self.inf_data = self.full_data[(self.full_data['timestamp'] >= self.inf_start_date) & (self.full_data['timestamp'] <= self.inf_end_date)]
+        else:
+            if inf_start_date is None:
+                inf_start_date = datetime.fromtimestamp(self.first_time, tz=timezone.utc).strftime('%Y-%m-%d')
+                warnings.warn(f"No inf_start provided. Using first date of dataset: {inf_start_date}")
+            if inf_end_date is None:
+                inf_end_date = datetime.fromtimestamp(self.last_time, tz=timezone.utc).strftime('%Y-%m-%d')
+                warnings.warn(f"No inf_end provided. Using last date of dataset: {inf_end_date}")
 
-        self.inf_start_date = datetime.strptime(inf_start_date, '%Y-%m-%d').timestamp()
-        self.inf_end_date = datetime.strptime(inf_end_date, '%Y-%m-%d').timestamp()
-            
-        self.inf_data = self.full_data[(self.full_data['timestamp'] >= self.inf_start_date) & (self.full_data['timestamp'] <= self.inf_end_date)]
+            # Use UTC for timestamp conversion so Unix timestamps in data match the filter range
+            self.inf_start_date = datetime.strptime(inf_start_date, '%Y-%m-%d').replace(tzinfo=timezone.utc).timestamp()
+            self.inf_end_date = datetime.strptime(inf_end_date + ' 23:59:59', '%Y-%m-%d %H:%M:%S').replace(tzinfo=timezone.utc).timestamp()
+            self.inf_data = self.full_data[(self.full_data['timestamp'] >= self.inf_start_date) & (self.full_data['timestamp'] <= self.inf_end_date)]
         self.inf_data = self.aggregate_data(self.inf_data, aggregate)
 
         self.work_dir.write_org_ohlcv_inf_data(self.inf_data)

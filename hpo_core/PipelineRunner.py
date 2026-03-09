@@ -57,13 +57,14 @@ class PipelineRunner:
         
         run_training_main(training_args)
 
-    def run_inference(self, experiment_name: str, run_id: str):
+    def run_inference(self, experiment_name: str, run_id: str, skip_mlflow_logging: bool = False):
         """
         Runs the inference pipeline. Requires DataManager.current() to be set.
 
         Args:
             experiment_name (str): The MLflow experiment name.
             run_id (str): The MLflow run name / model ID to load.
+            skip_mlflow_logging (bool): If True, do not log inference artifacts or metrics to MLflow.
         """
         # Align data format with model: fetch target from MLflow and set returns/volatility
         target = self.get_target_from_mlflow(
@@ -85,6 +86,7 @@ class PipelineRunner:
         inf_args.mlflow_tracking_uri = MLFLOW_TRACKING_URI
         inf_args.save_path = self.work_dir.get_work_dir_path()
         inf_args.experiment_name = experiment_name
+        inf_args.skip_mlflow_logging = skip_mlflow_logging
 
         run_inference_main(inf_args)
 
@@ -104,17 +106,18 @@ class PipelineRunner:
         else:
             self.work_dir.rename_ohlcv_inferenced_data()
 
-        # Calculate metrics and log inference artifacts via CalcMetrics
-        run_uuid, mlflow_params = self.get_mlflow_run_info(run_id, experiment_name=experiment_name, tracking_uri=MLFLOW_TRACKING_URI)
-        client = mlflow.tracking.MlflowClient()
-        calc_metrics = CalcMetrics(self.work_dir.args, data_manager, self.work_dir, params=mlflow_params)
-        calc_metrics.calc_and_log_to_mlflow(
-            client=client,
-            run_id=run_uuid,
-            log_returns_inference=self.work_dir.args.returns,
-            summary_table_path=None,
-            verbose=False,
-        )
+        # Calculate metrics and log inference artifacts via CalcMetrics (unless skipped)
+        if not skip_mlflow_logging:
+            run_uuid, mlflow_params = self.get_mlflow_run_info(run_id, experiment_name=experiment_name, tracking_uri=MLFLOW_TRACKING_URI)
+            client = mlflow.tracking.MlflowClient()
+            calc_metrics = CalcMetrics(self.work_dir.args, data_manager, self.work_dir, params=mlflow_params)
+            calc_metrics.calc_and_log_to_mlflow(
+                client=client,
+                run_id=run_uuid,
+                log_returns_inference=self.work_dir.args.returns,
+                summary_table_path=None,
+                verbose=False,
+            )
 
     def run_backtest(
         self,
@@ -172,9 +175,12 @@ class PipelineRunner:
             mlflow.set_tracking_uri(tracking_uri)
         client = mlflow.tracking.MlflowClient()
         exp = client.get_experiment_by_name(experiment_name) if experiment_name else client.get_experiment_by_name(llm_model)
-        runs = client.search_runs([exp.experiment_id], f"tags.mlflow.runName = '{model_id}'")
+        # Try run_id (UUID) first, then run name
+        runs = client.search_runs([exp.experiment_id], f"run_id = '{model_id}'", max_results=1)
         if not runs:
-            raise ValueError(f"No MLflow run found with name '{model_id}' in experiment '{experiment_name or llm_model}'")
+            runs = client.search_runs([exp.experiment_id], f"tags.mlflow.runName = '{model_id}'", max_results=1)
+        if not runs:
+            raise ValueError(f"No MLflow run found with ID or name '{model_id}' in experiment '{experiment_name or llm_model}'")
         run = runs[0]
         params = dict(run.data.params)
         # Cast pred_len to int for CalcMetrics

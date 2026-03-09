@@ -31,6 +31,7 @@ def parse_args():
     parser.add_argument('--save_path', type=str, default=None, help='Optional override for output location of inference.csv')
     parser.add_argument('--pipeline', type=bool, default=False, help='Informs that the inference is being run in the pipeline')
     parser.add_argument('--experiment_name', type=str, default=None, help='Experiment name to use for MLflow experiment tracking and logging.')
+    parser.add_argument('--skip_mlflow_logging', type=bool, default=False, help='If True, do not log inference artifacts to MLflow.')
     return parser.parse_args()
 
 def cast_params(params):
@@ -52,7 +53,12 @@ def load_mlflow_artifacts_and_args(model_id, llm_model, experiment_name = None, 
         experiment = client.get_experiment_by_name(experiment_name)
     else:
         experiment = client.get_experiment_by_name(llm_model)
-    runs = client.search_runs([experiment.experiment_id], f"tags.mlflow.runName = '{model_id}'")
+    # Try run_id (UUID) first, then run name
+    runs = client.search_runs([experiment.experiment_id], f"run_id = '{model_id}'", max_results=1)
+    if not runs:
+        runs = client.search_runs([experiment.experiment_id], f"tags.mlflow.runName = '{model_id}'", max_results=1)
+    if not runs:
+        raise ValueError(f"No MLflow run found with ID or name '{model_id}' in experiment '{experiment_name or llm_model}'")
     run = runs[0]
     run_id = run.info.run_id
     # Download model weights
@@ -71,6 +77,7 @@ def main(args):
         'data_path': getattr(args, 'data_path', None),
         'save_path': getattr(args, 'save_path', None),
         'experiment_name': getattr(args, 'experiment_name', None),
+        'skip_mlflow_logging': getattr(args, 'skip_mlflow_logging', False),
     }
     args, model_state_path, run_id = load_mlflow_artifacts_and_args(
         args.model_id, args.llm_model, experiment_name=cli_overrides['experiment_name'], tracking_uri=args.mlflow_tracking_uri)
@@ -159,11 +166,12 @@ def main(args):
             os.makedirs(save_path, exist_ok=True)
             result_df.to_csv(os.path.join(save_path, 'inference.csv'), index=False)
 
-        # Log to MLflow
-        with mlflow.start_run(run_id=run_id):
-            mlflow.log_artifact(csv_path)
-            mlflow.set_tag('inference', 'completed')
-            print(f"Logged inference results as 'inference.csv' to MLflow run {run_id}.")
+        # Log to MLflow (unless skipped for custom inference)
+        if not getattr(args, 'skip_mlflow_logging', False):
+            with mlflow.start_run(run_id=run_id):
+                mlflow.log_artifact(csv_path)
+                mlflow.set_tag('inference', 'completed')
+                print(f"Logged inference results as 'inference.csv' to MLflow run {run_id}.")
 
 if __name__ == '__main__':
     args = InferenceConfig.parse()

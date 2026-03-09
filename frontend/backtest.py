@@ -75,8 +75,10 @@ def build_backtest_tab():
             bt_num_trades = gr.Number(label="Number of Trades", interactive=False)
             bt_profit_factor = gr.Number(label="Profit Factor", interactive=False)
 
+        bt_summary_df = gr.Dataframe(visible=False)  # run_backtest returns 9 values; we ignore the 9th
+
         run_backtest_btn.click(
             fn=run_backtest,
             inputs=[bt_experiment_name, bt_run_id, bt_strategy, bt_initial_capital, bt_start_date, bt_end_date, bt_threshold],
-            outputs=[bt_equity_plot, backtest_output, bt_total_return, bt_sharpe_ratio, bt_max_drawdown, bt_win_rate, bt_num_trades, bt_profit_factor],
+            outputs=[bt_equity_plot, backtest_output, bt_total_return, bt_sharpe_ratio, bt_max_drawdown, bt_win_rate, bt_num_trades, bt_profit_factor, bt_summary_df],
         )

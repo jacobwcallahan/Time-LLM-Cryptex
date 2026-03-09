@@ -1,13 +1,12 @@
 import gradio as gr
+import subprocess
 from pathlib import Path
-from datetime import timedelta
-from datetime import datetime
+from datetime import datetime, timedelta
 import mlflow
+import numpy as np
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
-import tempfile
-import shutil
 import sys
 import os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -110,6 +109,410 @@ def _to_date_str(val):
     if isinstance(val, str) and len(val) >= 10:
         return val[:10]
     return str(val) if val else None
+
+
+def run_simple_inference(experiment_name, run_id):
+    """
+    Run inference on the selected model with streaming console output.
+    - Start date: day after the model's training end_date
+    - End date: end of dataset
+    Yields output progressively, then final status.
+    """
+    if not run_id:
+        yield "Error: Select a run first."
+        return
+    if not experiment_name:
+        yield "Error: Experiment name is required."
+        return
+
+    try:
+        project_root = Path(__file__).parent.parent
+        script_path = project_root / "run_simple_inference_cli.py"
+        if not script_path.exists():
+            yield f"Error: Script not found: {script_path}"
+            return
+
+        cmd = [
+            sys.executable,
+            str(script_path),
+            "--experiment_name", str(experiment_name),
+            "--run_id", str(run_id),
+        ]
+        env = {**os.environ, "PYTHONUNBUFFERED": "1"}
+        process = subprocess.Popen(
+            cmd,
+            cwd=str(project_root),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,
+            env=env,
+        )
+
+        output = ""
+        for line in iter(process.stdout.readline, ""):
+            output += line
+            yield output
+
+        process.stdout.close()
+        return_code = process.wait()
+
+        if return_code != 0:
+            output += f"\n\n--- Process exited with code {return_code} ---"
+            yield output
+    except Exception as e:
+        yield f"Error: {str(e)}\n\n{traceback.format_exc()}"
+
+
+def _clean_numeric_columns(df, skip_columns=None):
+    """Remove non-numeric characters ($, commas, spaces, etc.) from price/numeric columns.
+    Skips datetime/timestamp columns to avoid corrupting date values.
+    skip_columns: optional set/list of column names to never clean (e.g. timestamp column)."""
+    import re
+    _datetime_cols = {"timestamp", "date", "datetime", "time", "dt", "created_at", "updated_at"}
+    skip = set(skip_columns) if skip_columns else set()
+    skip.update(_datetime_cols)
+    for col in df.columns:
+        if col in skip or col.lower().strip() in _datetime_cols:
+            continue
+        if df[col].dtype == object or df[col].dtype.name == "string":
+            # Strip $, commas, spaces; keep digits, decimal point, minus
+            def clean_val(x):
+                if pd.isna(x):
+                    return x
+                s = str(x).strip()
+                s = re.sub(r"[^\d.\-eE]", "", s)
+                return s if s else None
+            df[col] = df[col].apply(clean_val)
+            # Convert to numeric
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+    return df
+
+
+def clean_csv_prices(csv_file, timestamp_column=None):
+    """Clean non-numeric characters from price columns in uploaded CSV. Returns (cleaned_path, preview, status).
+    timestamp_column: column name to skip (datetime values must not be cleaned)."""
+    if csv_file is None:
+        return None, None, "Upload a CSV file first."
+    try:
+        path = csv_file if isinstance(csv_file, str) else (getattr(csv_file, "name", None) or str(csv_file))
+        df = pd.read_csv(path)
+        skip = [timestamp_column] if timestamp_column else None
+        df = _clean_numeric_columns(df, skip_columns=skip)
+        project_root = Path(__file__).parent.parent
+        work_dir = project_root / "temp" / "frontend_custom_inference"
+        work_dir.mkdir(parents=True, exist_ok=True)
+        out_path = work_dir / "cleaned_upload.csv"
+        df.to_csv(out_path, index=False)
+        return str(out_path), df.head(5), "Cleaned: removed $, commas, and other non-numeric characters from price columns."
+    except Exception as e:
+        return None, None, f"Error cleaning: {e}"
+
+
+def compute_metrics_and_plot_from_csv(csv_path, pred_horizon=1, target="close"):
+    """
+    Compute MAE, MSE, MDA from inference CSV and create a plot.
+    Returns (status, fig, mae, mse, mda).
+    """
+    if not csv_path or not Path(csv_path).exists():
+        return "No inference file found.", None, None, None, None
+    try:
+        pred_horizon = int(pred_horizon) if pred_horizon else 1
+        df = pd.read_csv(csv_path)
+        pred_cols = [c for c in df.columns if "predicted" in c.lower()]
+        pred_len = len(pred_cols)
+        if pred_len == 0:
+            return "No prediction columns found in inference output.", None, None, None, None
+        if pred_horizon > pred_len:
+            pred_horizon = 1
+
+        # Compute MAE, MSE, MDA
+        pred_col = f"{target}_predicted_{pred_horizon}"
+        if pred_col not in df.columns:
+            pred_col = next((c for c in pred_cols if str(pred_horizon) in c), pred_cols[0])
+
+        mae_vals, mse_vals, mda_vals = [], [], []
+        for i in range(len(df) - pred_horizon):
+            row = df.iloc[i]
+            if pd.isna(row.get(pred_col, np.nan)):
+                continue
+            next_row = df.iloc[i + pred_horizon]
+            if pd.notna(next_row.get(target, np.nan)):
+                err = row[pred_col] - next_row[target]
+                mae_vals.append(abs(err))
+                mse_vals.append(err ** 2)
+                current_actual = row.get(target, row[pred_col])
+                pred_dir = row[pred_col] - current_actual
+                actual_dir = next_row[target] - current_actual
+                mda_vals.append((pred_dir * actual_dir) > 0)
+
+        mae = float(np.mean(mae_vals)) if mae_vals else None
+        mse = float(np.mean(mse_vals)) if mse_vals else None
+        mda = float(np.mean(mda_vals)) if mda_vals else None
+
+        # Normalize OHLCV column names for plotting (inference output may use different casing)
+        for k, v in [("Open", "open"), ("High", "high"), ("Low", "low"), ("Close", "close"), ("Volume", "volume")]:
+            if k in df.columns and v not in df.columns:
+                df = df.rename(columns={k: v})
+
+        # Build plot
+        date_col = "timestamp" if "timestamp" in df.columns else ("date" if "date" in df.columns else None)
+        if date_col:
+            df = df.copy()
+            if df[date_col].dtype in ["int64", "float64"]:
+                df[date_col] = pd.to_datetime(df[date_col], unit="s")
+            else:
+                df[date_col] = pd.to_datetime(df[date_col])
+
+        fig = None
+        if date_col:
+            fig = go.Figure()
+            has_ohlcv = all(c in df.columns for c in ["open", "high", "low", "close"])
+            if has_ohlcv:
+                fig.add_trace(go.Candlestick(
+                    x=df[date_col], open=df["open"], high=df["high"], low=df["low"], close=df["close"],
+                    name="OHLCV", increasing_line_color="green", decreasing_line_color="red",
+                ))
+            elif "close" in df.columns:
+                fig.add_trace(go.Scatter(
+                    x=df[date_col], y=df["close"], mode="lines", name="Close",
+                    line=dict(color="black", width=1),
+                ))
+            elif target in df.columns:
+                fig.add_trace(go.Scatter(
+                    x=df[date_col], y=df[target], mode="lines", name=target.capitalize(),
+                    line=dict(color="black", width=1),
+                ))
+            # Prediction: pred[i] forecasts close at row i+pred_horizon — plot it at that date
+            if pred_col in df.columns:
+                x_pred = df[date_col].iloc[pred_horizon:].values
+                y_pred = df[pred_col].iloc[:-pred_horizon].values
+                valid = np.isfinite(y_pred)
+                if valid.any():
+                    fig.add_trace(go.Scatter(
+                        x=x_pred[valid], y=y_pred[valid], mode="lines",
+                        name=f"Prediction ({pred_horizon} step ahead)",
+                        line=dict(color="blue", width=2),
+                    ))
+            fig.update_layout(
+                title="Custom Inference Results",
+                xaxis_title="Date", yaxis_title="Price",
+                xaxis_rangeslider_visible=False, template="plotly_white", width=1000, height=600,
+            )
+
+        status = f"Inference: {len(df)} rows, {pred_len} prediction horizon(s)."
+        return status, fig, mae, mse, mda
+    except Exception as e:
+        return f"Error computing metrics: {e}", None, None, None, None
+
+
+def _timestamp_to_unix(series, format=None):
+    """Convert a pandas Series to Unix seconds (int64). Handles numeric, datetime strings, etc.
+
+    Args:
+        series: pandas Series with timestamp values
+        format: Optional strftime format string (e.g. '%Y-%m-%d', '%Y-%m-%d %H:%M:%S').
+                Use 'unix' to force numeric Unix timestamp parsing.
+                When provided for string data, uses this format for parsing.
+    """
+    # Explicit unix/numeric request
+    if format and str(format).strip().lower() == "unix":
+        vals = pd.to_numeric(series, errors="coerce")
+        if vals.isna().all():
+            raise ValueError(
+                "Format is 'unix' but column could not be parsed as numbers. "
+                f"Sample: {series.dropna().head(3).tolist()}"
+            )
+        valid = vals.dropna()
+        if len(valid) > 0 and valid.abs().max() > 1e12:
+            vals = vals / 1000  # milliseconds to seconds
+        return vals.astype("int64")
+
+    # Try numeric conversion first (handles int64, float64, and object dtype with numeric strings)
+    try:
+        vals = pd.to_numeric(series, errors="coerce")
+        valid_mask = vals.notna()
+        if valid_mask.any():
+            valid = vals[valid_mask]
+            max_abs = valid.abs().max()
+            if max_abs >= 1e8:  # Likely Unix timestamp (seconds or ms)
+                if max_abs > 1e12:
+                    vals = vals / 1000  # milliseconds to seconds
+                # Only use numeric path if most values parsed (avoid partial success)
+                if valid_mask.all():
+                    return vals.astype("int64")
+    except (ValueError, TypeError):
+        pass
+
+    # Parse as datetime - try format first if provided
+    fmt = str(format).strip() if format else None
+    dt = None
+    if fmt:
+        dt = pd.to_datetime(series, format=fmt, errors="coerce")
+    if dt is None or (dt.isna().all() if dt is not None else True):
+        # Fallback: infer without format (handles ISO, common formats)
+        dt = pd.to_datetime(series, errors="coerce")
+    if dt is None or dt.isna().all():
+        # Try format='mixed' for pandas 2.0+ (handles varying formats in same column)
+        try:
+            dt = pd.to_datetime(series, format="mixed", errors="coerce")
+        except Exception:
+            pass
+    if dt is None or dt.isna().all():
+        # Last resort: try with unit='s' for numeric strings
+        try:
+            numeric = pd.to_numeric(series, errors="coerce")
+            if not numeric.isna().all():
+                dt = pd.to_datetime(numeric, unit="s", errors="coerce")
+        except (ValueError, TypeError):
+            pass
+
+    if dt is None or dt.isna().all():
+        sample = series.dropna().head(3).tolist()
+        raise ValueError(
+            f"Could not parse timestamp column as dates or Unix values. "
+            f"Sample values: {sample}. "
+            f"Dtype: {series.dtype}. "
+            f"Try specifying a format (e.g. %Y-%m-%d or %Y-%m-%d %H:%M:%S)."
+        )
+    return (dt.astype("int64") // 10**9).astype("int64")
+
+
+def run_custom_inference(experiment_name, run_id, csv_file, timestamp_column, timestamp_format, target_column, ohlcv_columns=None, pred_horizon=1):
+    """
+    Run inference on an uploaded CSV file using the selected model.
+    Saves results to custom_inference.csv in the project root.
+    Does not log to MLflow.
+    """
+    err = lambda msg: (msg, None, None, None, None)
+    try:
+        if not run_id:
+            return err("Error: Select a model (run) first.")
+        if not experiment_name:
+            return err("Error: Experiment name is required.")
+        if csv_file is None:
+            return err("Error: Upload a CSV file first.")
+        if not timestamp_column:
+            return err("Error: Select the timestamp column.")
+        if not target_column:
+            return err("Error: Select the target column.")
+
+        project_root = Path(__file__).parent.parent
+        work_dir_path = project_root / "temp" / "frontend_custom_inference"
+        custom_output_path = project_root / "custom_inference.csv"
+
+        # Save uploaded file to temp and prepare data
+        import tempfile
+        import shutil
+        file_path = csv_file if isinstance(csv_file, str) else (getattr(csv_file, "name", None) or str(csv_file))
+        with tempfile.NamedTemporaryFile(suffix=".csv", delete=False) as tmp:
+            shutil.copy(file_path, tmp.name)
+            uploaded_path = tmp.name
+
+        try:
+            df = pd.read_csv(uploaded_path)
+
+            # Clean non-numeric characters from price columns ($, commas, etc.); skip datetime column
+            df = _clean_numeric_columns(df, skip_columns=[timestamp_column])
+
+            # Validate required columns
+            if timestamp_column not in df.columns:
+                return err(f"Error: Timestamp column '{timestamp_column}' not found in CSV. Columns: {list(df.columns)}")
+            if target_column not in df.columns:
+                return err(f"Error: Target column '{target_column}' not found in CSV. Columns: {list(df.columns)}")
+
+            # Convert timestamp column to Unix seconds and rename to 'timestamp'
+            try:
+                df["timestamp"] = _timestamp_to_unix(df[timestamp_column], format=timestamp_format)
+            except Exception as e:
+                return err(f"Error: Could not convert timestamp column to Unix format: {e}")
+            if timestamp_column != "timestamp":
+                df = df.drop(columns=[timestamp_column])
+
+            # Get model's expected target from MLflow
+            mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
+            client = mlflow.tracking.MlflowClient()
+            exp = client.get_experiment_by_name(experiment_name)
+            if exp is None:
+                return err(f"Error: Experiment '{experiment_name}' not found.")
+            runs = client.search_runs([exp.experiment_id], f"run_id = '{run_id}'", max_results=1)
+            if not runs:
+                runs = client.search_runs([exp.experiment_id], f"tags.mlflow.runName = '{run_id}'", max_results=1)
+            if not runs:
+                return err(f"Error: Run '{run_id}' not found in experiment.")
+            model_target = runs[0].data.params.get("target", "close")
+
+            # Rename target column if needed to match model's expected target
+            if target_column != model_target:
+                df = df.rename(columns={target_column: model_target})
+
+            # Apply OHLCV column mapping (user-selected or auto-guessed)
+            if ohlcv_columns:
+                for std_name, user_col in ohlcv_columns.items():
+                    if user_col and str(user_col).strip() and user_col in df.columns and user_col != std_name:
+                        df = df.rename(columns={user_col: std_name})
+
+            # Fallback: normalize common variants (Open->open, etc.)
+            ohlcv_map = {"Open": "open", "High": "high", "Low": "low", "Close": "close", "Volume": "volume"}
+            rename_map = {k: v for k, v in ohlcv_map.items() if k in df.columns and v not in df.columns}
+            if rename_map:
+                df = df.rename(columns=rename_map)
+
+            # Ensure 'close' exists for inference (model typically expects it)
+            if "close" not in df.columns:
+                for alt in ["Close", "close_price", "price"]:
+                    if alt in df.columns:
+                        df = df.rename(columns={alt: "close"})
+                        break
+                if "close" not in df.columns:
+                    return err(
+                        "Error: Data must have a 'close' column. Select it in OHLCV mapping or ensure your CSV has it. "
+                        f"Current columns: {list(df.columns)}"
+                    )
+
+            # Sort by date ascending (oldest first, most recent at bottom)
+            df = df.sort_values("timestamp", ascending=True).reset_index(drop=True)
+
+            # Save prepared data
+            work_dir_path.mkdir(parents=True, exist_ok=True)
+            data_path = work_dir_path / "uploaded_data.csv"
+            df.to_csv(data_path, index=False)
+
+            # Create WorkDir and DataManager
+            args = HpoArgs(
+                parse_cli=False,
+                model_name=run_id,
+                experiment_name=experiment_name,
+                granularity="daily",
+                aggregate=1,
+                inf_start=None,
+                inf_end=None,
+                data_path=str(data_path),
+            )
+            dataset_path = project_root / "dataset" / "candles"
+            work_dir = WorkDir(args, work_dir=work_dir_path, dataset_path=dataset_path)
+            work_dir.create_work_dir()
+
+            data_manager = DataManager(work_dir)
+            pipeline_runner = PipelineRunner(work_dir)
+            pipeline_runner.run_inference(experiment_name, run_id, skip_mlflow_logging=True)
+
+            # Copy output to custom_inference.csv and compute metrics/plot
+            # Prefer ohlcv_inference.csv (has OHLCV + close_predicted_* for returns models)
+            ohlcv_path = work_dir.get_ohlcv_inferenced_path()
+            inferenced_path = ohlcv_path if ohlcv_path.exists() else work_dir.get_inferenced_path()
+            if inferenced_path.exists():
+                shutil.copy(inferenced_path, custom_output_path)
+                status, fig, mae, mse, mda = compute_metrics_and_plot_from_csv(
+                    str(custom_output_path), pred_horizon=pred_horizon, target=model_target
+                )
+                full_status = f"Inference completed successfully!\nResults saved to: {custom_output_path}\n\n{status}"
+                return full_status, fig, mae, mse, mda
+            return f"Inference completed but output not found at {inferenced_path}", None, None, None, None
+        finally:
+            Path(uploaded_path).unlink(missing_ok=True)
+    except Exception as e:
+        return (f"Error running custom inference: {str(e)}\n\nTraceback:\n{traceback.format_exc()}", None, None, None, None)
 
 
 def run_inference_handler(model_name, experiment_name, custom_dataset_path, granularity, aggregate, start_date, end_date, save_path=None):
@@ -222,6 +625,60 @@ def load_metrics_from_mlflow(experiment_name, run_id, pred_horizon=1):
         return None, None, None
 
 
+def _get_run_artifact_status(client, run_id):
+    """
+    Check if inference and backtesting were run based on MLflow artifacts.
+    Returns (has_inference: bool, has_backtest: bool).
+    """
+    has_inference, has_backtest = False, False
+    try:
+        artifacts = client.list_artifacts(run_id)
+        for a in artifacts:
+            path_lower = (a.path or "").lower()
+            if "ohlcv_inference" in path_lower or (path_lower.endswith("inference.csv") and "ret_" not in path_lower):
+                has_inference = True
+            if "summary_table" in path_lower:
+                has_backtest = True
+            if has_inference and has_backtest:
+                break
+    except Exception as e:
+        logger.debug(f"list_artifacts error for run {run_id}: {e}")
+    return has_inference, has_backtest
+
+
+def list_experiment_runs_with_status(experiment_name):
+    """
+    List all non-failed runs in an experiment with their inference/backtest status.
+    Returns list of dicts: [{"run_id": str, "run_name": str, "has_inference": bool, "has_backtest": bool}, ...]
+    or error message string.
+    """
+    try:
+        mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
+        client = mlflow.tracking.MlflowClient(tracking_uri=MLFLOW_TRACKING_URI)
+        exp = client.get_experiment_by_name(experiment_name)
+        if exp is None:
+            return f"Error: Experiment '{experiment_name}' not found"
+        runs = client.search_runs(
+            experiment_ids=[exp.experiment_id],
+            filter_string='attributes.status = "FINISHED"',
+            order_by=["start_time DESC"],
+        )
+        result = []
+        for r in runs:
+            run_uuid = r.info.run_id
+            run_name = r.data.tags.get("mlflow.runName", run_uuid)
+            has_inf, has_bt = _get_run_artifact_status(client, run_uuid)
+            result.append({
+                "run_id": run_uuid,
+                "run_name": run_name,
+                "has_inference": has_inf,
+                "has_backtest": has_bt,
+            })
+        return result
+    except Exception as e:
+        return f"Error: {str(e)}\n{traceback.format_exc()}"
+
+
 def check_and_plot_mlflow_inference(experiment_name, run_id, pred_horizon=1):
     """Check if MLflow has inference data for the given run and plot it as candlestick with prediction overlay.
 
@@ -311,23 +768,17 @@ def check_and_plot_mlflow_inference(experiment_name, run_id, pred_horizon=1):
             decreasing_line_color='red'
         ))
         
-        # Add prediction line if available
+        # Add prediction line: pred[i] forecasts close at row i+pred_horizon — plot at that date
         pred_col = f'close_predicted_{pred_horizon}'
-        if pred_col in df.columns:
-            fig.add_trace(go.Scatter(
-                x=df[date_col],
-                y=df[pred_col],
-                mode='lines',
-                name=f'Prediction ({pred_horizon} step{"s" if pred_horizon > 1 else ""} ahead)',
-                line=dict(color='blue', width=2)
-            ))
-        else:
-            # Try alternative prediction column naming
-            alt_pred_cols = [c for c in pred_cols if str(pred_horizon) in c]
-            if alt_pred_cols:
+        if pred_col not in df.columns:
+            pred_col = next((c for c in pred_cols if str(pred_horizon) in c), None)
+        if pred_col and pred_col in df.columns:
+            x_pred = df[date_col].iloc[pred_horizon:].values
+            y_pred = df[pred_col].iloc[:-pred_horizon].values
+            valid = np.isfinite(y_pred)
+            if valid.any():
                 fig.add_trace(go.Scatter(
-                    x=df[date_col],
-                    y=df[alt_pred_cols[0]],
+                    x=x_pred[valid], y=y_pred[valid],
                     mode='lines',
                     name=f'Prediction ({pred_horizon} step{"s" if pred_horizon > 1 else ""} ahead)',
                     line=dict(color='blue', width=2)
@@ -360,16 +811,21 @@ def check_and_plot_mlflow_inference(experiment_name, run_id, pred_horizon=1):
                 line=dict(color='black', width=1)
             ))
         
-        # Add prediction line
+        # Add prediction line (aligned: pred[i] at date i+pred_horizon)
         pred_col = f'close_predicted_{pred_horizon}'
-        if pred_col in df.columns:
-            fig.add_trace(go.Scatter(
-                x=df[date_col],
-                y=df[pred_col],
-                mode='lines',
-                name=f'Prediction ({pred_horizon} step{"s" if pred_horizon > 1 else ""} ahead)',
-                line=dict(color='blue', width=2)
-            ))
+        if pred_col not in df.columns:
+            pred_col = next((c for c in pred_cols if str(pred_horizon) in c), None)
+        if pred_col and pred_col in df.columns:
+            x_pred = df[date_col].iloc[pred_horizon:].values
+            y_pred = df[pred_col].iloc[:-pred_horizon].values
+            valid = np.isfinite(y_pred)
+            if valid.any():
+                fig.add_trace(go.Scatter(
+                    x=x_pred[valid], y=y_pred[valid],
+                    mode='lines',
+                    name=f'Prediction ({pred_horizon} step{"s" if pred_horizon > 1 else ""} ahead)',
+                    line=dict(color='blue', width=2)
+                ))
         
         fig.update_layout(
             title=f"Inference Results for Run: {run_id}",
@@ -453,35 +909,71 @@ def _backtest_plot_from_results(data_df, trade_log_df, strategy_name):
     return fig
 
 
-def run_backtest(experiment_name, run_id, strategy, initial_capital, start_date, end_date, threshold):
+def fetch_summary_table_from_mlflow(experiment_name, run_id):
+    """
+    Fetch backtest summary_table from MLflow run artifacts.
+    Returns (summary_df, error_msg). On success, error_msg is None. summary_df is pandas DataFrame or None.
+    """
+    try:
+        mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
+        client = mlflow.tracking.MlflowClient(tracking_uri=MLFLOW_TRACKING_URI)
+        exp = client.get_experiment_by_name(experiment_name)
+        if exp is None:
+            return None, f"Experiment '{experiment_name}' not found"
+        runs = client.search_runs(experiment_ids=[exp.experiment_id], filter_string=f"run_id = '{run_id}'", max_results=1)
+        if not runs:
+            runs = client.search_runs(experiment_ids=[exp.experiment_id], filter_string=f"tags.mlflow.runName = '{run_id}'", max_results=1)
+        if not runs:
+            return None, "Run not found"
+        run_uuid = runs[0].info.run_id
+
+        for artifact_path in ["summary_table.csv", "summary_table"]:
+            try:
+                downloaded = mlflow.artifacts.download_artifacts(run_id=run_uuid, artifact_path=artifact_path)
+                path = Path(downloaded)
+                if path.is_dir():
+                    csv_path = path / "summary_table.csv"
+                else:
+                    csv_path = path
+                if csv_path.exists():
+                    df = pd.read_csv(csv_path)
+                    return df, None
+            except Exception:
+                continue
+        return None, None  # No summary_table found, no error
+    except Exception as e:
+        return None, str(e)
+
+
+def run_backtest(experiment_name, run_id, strategy, initial_capital, start_date, end_date, threshold, log_to_mlflow=False):
     """Run backtest on inference data from MLflow. Returns (plot, total_return, sharpe, max_dd, win_rate, num_trades, profit_factor)."""
     import shutil
     import tempfile
 
-    null_result = (None, None, None, None, None, None, None)
+    null_result = (None, None, None, None, None, None, None, None, None)
 
     try:
         if not run_id:
-            return (None, "Error: Run ID is required", None, None, None, None, None)
+            return (None, "Error: Run ID is required", None, None, None, None, None, None, None)
         if not experiment_name:
-            return (None, "Error: Experiment Name is required", None, None, None, None, None)
+            return (None, "Error: Experiment Name is required", None, None, None, None, None, None, None)
 
         from backtesting.backtest import BacktestRunner, STRATEGIES
         from backtesting.utils import load_and_prepare_data
 
         if strategy and strategy not in STRATEGIES:
-            return (None, f"Error: Strategy '{strategy}' not found", None, None, None, None, None)
+            return (None, f"Error: Strategy '{strategy}' not found", None, None, None, None, None, None, None)
 
         mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
         client = mlflow.tracking.MlflowClient(tracking_uri=MLFLOW_TRACKING_URI)
         exp = client.get_experiment_by_name(experiment_name)
         if exp is None:
-            return (None, f"Error: Experiment '{experiment_name}' not found", None, None, None, None, None)
+            return (None, f"Error: Experiment '{experiment_name}' not found", None, None, None, None, None, None, None)
         runs = client.search_runs(experiment_ids=[exp.experiment_id], filter_string=f"run_id = '{run_id}'", max_results=1)
         if not runs:
             runs = client.search_runs(experiment_ids=[exp.experiment_id], filter_string=f"tags.mlflow.runName = '{run_id}'", max_results=1)
         if not runs:
-            return (None, f"Error: No run found with ID/name '{run_id}'", None, None, None, None, None)
+            return (None, f"Error: No run found with ID/name '{run_id}'", None, None, None, None, None, None, None)
 
         run_uuid = runs[0].info.run_id
         try:
@@ -490,9 +982,9 @@ def run_backtest(experiment_name, run_id, strategy, initial_capital, start_date,
             if artifact_path.is_dir():
                 artifact_path = artifact_path / "ohlcv_inference.csv"
             if not artifact_path.exists():
-                return (None, "Error: ohlcv_inference.csv not found in run artifacts", None, None, None, None, None)
+                return (None, "Error: ohlcv_inference.csv not found in run artifacts", None, None, None, None, None, None, None)
         except Exception as e:
-            return (None, f"Error: Could not download ohlcv_inference.csv: {e}", None, None, None, None, None)
+            return (None, f"Error: Could not download ohlcv_inference.csv: {e}", None, None, None, None, None, None, None)
 
         runner = BacktestRunner(
             str(artifact_path),
@@ -508,7 +1000,7 @@ def run_backtest(experiment_name, run_id, strategy, initial_capital, start_date,
 
         summary_df = runner.create_summary_table()
         if summary_df is None or summary_df.empty:
-            return (None, "Backtest completed but no results to display.", None, None, None, None, None)
+            return (None, "Backtest completed but no results to display.", None, None, None, None, None, None, None)
 
         strat_name = str(summary_df.iloc[0]["Strategy"])
         row = summary_df.iloc[0]
@@ -531,6 +1023,18 @@ def run_backtest(experiment_name, run_id, strategy, initial_capital, start_date,
         fig = _backtest_plot_from_results(runner.data, trade_log_df, strat_name)
         summary_str = summary_df.to_string(index=False, float_format="%.2f")
 
-        return (fig, summary_str, total_return, sharpe, max_dd, win_rate, num_trades, profit_factor)
+        if log_to_mlflow:
+            try:
+                import tempfile
+                tmpdir = Path(tempfile.mkdtemp())
+                summary_path = tmpdir / "summary_table.csv"
+                summary_df.to_csv(summary_path, index=False)
+                client.log_artifact(run_id=run_uuid, local_path=str(summary_path), artifact_path="summary_table")
+                summary_path.unlink(missing_ok=True)
+                tmpdir.rmdir()
+            except Exception as log_err:
+                logger.debug(f"Failed to log summary_table to MLflow: {log_err}")
+
+        return (fig, summary_str, total_return, sharpe, max_dd, win_rate, num_trades, profit_factor, summary_df)
     except Exception as e:
-        return (None, f"Error: {str(e)}\n{traceback.format_exc()}", None, None, None, None, None)
+        return (None, f"Error: {str(e)}\n{traceback.format_exc()}", None, None, None, None, None, None, None)
