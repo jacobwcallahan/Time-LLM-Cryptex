@@ -165,7 +165,7 @@ def run_inference_handler(model_name, experiment_name, custom_dataset_path, gran
 
         return f"Inference completed successfully!\nResults saved to: {work_dir.get_inferenced_path()}"
     except Exception as e:
-        return f"Error running inference: {str(e)}"
+        return f"Error running inference: {str(e)}\n\nTraceback:\n{traceback.format_exc()}"
 
 
 def _fetch_metrics_from_mlflow(client, run_id, pred_horizon=1):
@@ -338,7 +338,9 @@ def check_and_plot_mlflow_inference(experiment_name, run_id, pred_horizon=1):
             xaxis_title="Date",
             yaxis_title="Price",
             xaxis_rangeslider_visible=False,
-            template="plotly_white"
+            template="plotly_white",
+            width=1000,
+            height=600,
         )
         
         status = f"Found inference data for run: {run_id}\nShape: {df.shape[0]} rows, {df.shape[1]} columns\nAvailable prediction horizons: 1-{max_horizon}" if max_horizon > 0 else f"Found inference data for run: {run_id}\nShape: {df.shape[0]} rows, {df.shape[1]} columns"
@@ -373,7 +375,9 @@ def check_and_plot_mlflow_inference(experiment_name, run_id, pred_horizon=1):
             title=f"Inference Results for Run: {run_id}",
             xaxis_title="Date",
             yaxis_title="Value",
-            template="plotly_white"
+            template="plotly_white",
+            width=1000,
+            height=600,
         )
         
         status = f"Found inference data for run: {run_id}\nShape: {df.shape[0]} rows, {df.shape[1]} columns\nAvailable prediction horizons: 1-{max_horizon}" if max_horizon > 0 else f"Found inference data for run: {run_id}\nShape: {df.shape[0]} rows, {df.shape[1]} columns"
@@ -383,6 +387,7 @@ def check_and_plot_mlflow_inference(experiment_name, run_id, pred_horizon=1):
         # No date column, create a simple index plot
         numeric_cols = df.select_dtypes(include=['float64', 'int64']).columns[:4].tolist()
         fig = px.line(df, y=numeric_cols, title=f"Inference Results for Run: {run_id}")
+        fig.update_layout(width=1000, height=600)
         return f"Found inference data for run: {run_id}\nShape: {df.shape[0]} rows, {df.shape[1]} columns", fig, mae, mse, mda
 
 

@@ -144,12 +144,13 @@ def run_training(args: TrainConfig, accelerator):
 
                 # Print progress every 1000 iterations
                 if (i + 1) % 1000 == 0:
-                    accelerator.print(f"\titers: {i + 1}, epoch: {epoch + 1} | loss: {loss.item():.7f}")
+                    accelerator.print(f"\titers: {i + 1}, epoch: {epoch + 1} | loss: {loss.item():.7f}", end='\r')
                     speed = (time.time() - time_now) / iter_count
                     left_time = speed * ((args.train_epochs - epoch) * train_steps - i)
-                    accelerator.print(f'\tspeed: {speed:.4f}s/iter; left time: {left_time:.4f}s')
+                    accelerator.print(f'\tspeed: {speed:.4f}s/iter; left time: {left_time:.4f}s', end='\r')
                     iter_count = 0
                     time_now = time.time()
+            accelerator.print("\n")
             accelerator.print(f"Epoch: {epoch + 1} cost time: {time.time() - epoch_time:.4f}s")
 
             # Calculate average training loss

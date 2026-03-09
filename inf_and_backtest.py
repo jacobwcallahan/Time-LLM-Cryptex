@@ -91,7 +91,7 @@ def inf_and_backtest(
     pipeline_runner.run_inference(experiment_name=experiment_name, run_id=run_id)
 
     if run_backtest:
-        pipeline_runner.run_backtest(pipeline=True)
+        pipeline_runner.run_backtest(pipeline=True, run_id=run_id, experiment_name=experiment_name)
         print(f"Backtest summary saved to {work_dir.summary_table_path()}")
 
     # Calc metrics and log to MLflow

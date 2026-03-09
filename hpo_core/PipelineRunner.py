@@ -5,6 +5,7 @@ from backtesting.backtest import main as backtest_main
 from run_main import main as run_training_main
 from infra.TrainConfig import TrainConfig
 from hpo_core.DataManager import DataManager
+from hpo_core.CalcMetrics import CalcMetrics
 import os
 import mlflow
 
@@ -103,17 +104,17 @@ class PipelineRunner:
         else:
             self.work_dir.rename_ohlcv_inferenced_data()
 
-        # Log inference artifacts to MLflow so Check & Plot Inference and Backtest can use them
-        run_uuid, _ = self.get_mlflow_run_info(run_id, experiment_name=experiment_name, tracking_uri=MLFLOW_TRACKING_URI)
+        # Calculate metrics and log inference artifacts via CalcMetrics
+        run_uuid, mlflow_params = self.get_mlflow_run_info(run_id, experiment_name=experiment_name, tracking_uri=MLFLOW_TRACKING_URI)
         client = mlflow.tracking.MlflowClient()
-        client.log_artifact(
+        calc_metrics = CalcMetrics(self.work_dir.args, data_manager, self.work_dir, params=mlflow_params)
+        calc_metrics.calc_and_log_to_mlflow(
+            client=client,
             run_id=run_uuid,
-            local_path=str(self.work_dir.get_ohlcv_inferenced_path()),
+            log_returns_inference=self.work_dir.args.returns,
+            summary_table_path=None,
+            verbose=False,
         )
-        if self.work_dir.args.returns:
-            ret_path = self.work_dir.get_ret_inferenced_path()
-            if ret_path.exists():
-                client.log_artifact(run_id=run_uuid, local_path=str(ret_path))
 
     def run_backtest(
         self,
