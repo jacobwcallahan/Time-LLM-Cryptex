@@ -103,12 +103,26 @@ class PipelineRunner:
         else:
             self.work_dir.rename_ohlcv_inferenced_data()
 
+        # Log inference artifacts to MLflow so Check & Plot Inference and Backtest can use them
+        run_uuid, _ = self.get_mlflow_run_info(run_id, experiment_name=experiment_name, tracking_uri=MLFLOW_TRACKING_URI)
+        client = mlflow.tracking.MlflowClient()
+        client.log_artifact(
+            run_id=run_uuid,
+            local_path=str(self.work_dir.get_ohlcv_inferenced_path()),
+        )
+        if self.work_dir.args.returns:
+            ret_path = self.work_dir.get_ret_inferenced_path()
+            if ret_path.exists():
+                client.log_artifact(run_id=run_uuid, local_path=str(ret_path))
+
     def run_backtest(
         self,
         pipeline: bool = False,
         data_path: str = None,
         strategy: str = None,
         cash: float = None,
+        run_id: str = None,
+        experiment_name: str = None,
     ):
         """
         Run backtest on inference results.
@@ -118,6 +132,8 @@ class PipelineRunner:
             data_path: Override path to inference CSV. Default: work_dir ohlcv_inference.
             strategy: Strategy name to run (e.g. 'SimpleAI'). None = run all.
             cash: Initial capital. Default: 100000.
+            run_id: MLflow run name. If provided with experiment_name, log summary_table to MLflow.
+            experiment_name: MLflow experiment name. If provided with run_id, log summary_table to MLflow.
 
         Returns:
             Summary DataFrame from backtest.
@@ -132,10 +148,17 @@ class PipelineRunner:
             "strategy": strategy,
             "walk_forward": None,
         }
-        return backtest_main(
+        result = backtest_main(
             backtest_args,
             summary_table_path=str(self.work_dir.summary_table_path()),
         )
+        if run_id and experiment_name:
+            run_uuid, _ = self.get_mlflow_run_info(run_id, experiment_name=experiment_name, tracking_uri=MLFLOW_TRACKING_URI)
+            summary_path = self.work_dir.summary_table_path()
+            if summary_path.exists():
+                client = mlflow.tracking.MlflowClient()
+                client.log_artifact(run_id=run_uuid, local_path=str(summary_path))
+        return result
 
     def get_target_from_mlflow(self, model_id: str, experiment_name: str = None, llm_model: str = "LLAMA3.1", tracking_uri: str = None) -> str:
         """Fetch the target param from an MLflow run. Used by pipeline to align inference data format with model."""
