@@ -5,7 +5,7 @@ Provides UI for evaluating model predictions with trading strategies.
 
 import gradio as gr
 
-from helper_fcns import run_backtest
+from utils import run_backtest
 
 
 def build_backtest_tab():

@@ -6,7 +6,7 @@ Click a run to view inference results and metrics.
 
 import gradio as gr
 
-from helper_fcns import (
+from utils import (
     list_experiment_runs_with_status,
     check_and_plot_mlflow_inference,
     fetch_summary_table_from_mlflow,

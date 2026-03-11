@@ -5,7 +5,7 @@ Provides UI for running inference and visualizing MLflow inference data.
 
 import gradio as gr
 
-from helper_fcns import run_inference_handler, check_and_plot_mlflow_inference
+from utils import run_inference_handler, check_and_plot_mlflow_inference
 
 
 def build_inference_tab():
