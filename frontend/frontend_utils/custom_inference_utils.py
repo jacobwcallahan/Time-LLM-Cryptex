@@ -11,11 +11,6 @@ import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 
-from hpo_core.PipelineRunner import PipelineRunner
-from hpo_core.DataManager import DataManager
-from hpo_core.HpoArgs import HpoArgs
-from hpo_core.WorkDir import WorkDir
-
 from .common import MLFLOW_TRACKING_URI
 
 
@@ -212,6 +207,11 @@ def _timestamp_to_unix(series, format=None):
 
 def run_custom_inference(experiment_name, run_id, csv_file, timestamp_column, timestamp_format, target_column, ohlcv_columns=None, pred_horizon=1):
     """Run inference on an uploaded CSV file using the selected model. Saves to custom_inference.csv."""
+    from hpo_core.PipelineRunner import PipelineRunner
+    from hpo_core.DataManager import DataManager
+    from hpo_core.HpoArgs import HpoArgs
+    from hpo_core.WorkDir import WorkDir
+
     err = lambda msg: (msg, None, None, None, None)
     try:
         if not run_id:

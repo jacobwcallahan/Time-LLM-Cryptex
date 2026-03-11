@@ -5,7 +5,7 @@ Provides UI for running inference and visualizing MLflow inference data.
 
 import gradio as gr
 
-from utils import run_inference_handler, check_and_plot_mlflow_inference
+from frontend_utils import run_inference_handler, check_and_plot_mlflow_inference
 
 
 def build_inference_tab():
@@ -42,13 +42,13 @@ def build_inference_tab():
                 inf_start_date = gr.DateTime(
                     label="Start Date",
                     value="",
-                    info="Inference start date (YYYY-MM-DD)",
+                    info="Inference start date. Leave both empty to run on entire dataset.",
                     include_time=False
                 )
                 inf_end_date = gr.DateTime(
                     label="End Date",
                     value="",
-                    info="Inference end date (YYYY-MM-DD)",
+                    info="Inference end date. Leave empty to run through end of dataset.",
                     include_time=False
                 )
                 inf_aggregate = gr.Number(

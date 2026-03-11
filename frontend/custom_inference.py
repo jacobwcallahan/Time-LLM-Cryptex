@@ -7,7 +7,7 @@ from pathlib import Path
 import gradio as gr
 import pandas as pd
 
-from utils import (
+from frontend_utils import (
     list_experiment_runs_with_status,
     run_custom_inference,
     clean_csv_prices,

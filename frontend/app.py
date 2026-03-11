@@ -4,6 +4,25 @@ Provides a UI for configuring hyperparameter optimization runs.
 """
 
 import os
+import sys
+from pathlib import Path
+
+# Add project root to path FIRST so utils.tools (used by models) resolves to project utils, not frontend/utils
+_frontend_dir = Path(__file__).resolve().parent
+_project_root = _frontend_dir.parent
+_pr_str = str(_project_root)
+if _pr_str in sys.path:
+    sys.path.remove(_pr_str)
+sys.path.insert(0, _pr_str)
+
+# CRITICAL: frontend/utils must not exist - it shadows project utils and causes circular imports
+_stale_utils = _frontend_dir / "utils"
+if _stale_utils.is_dir():
+    sys.exit(
+        f"ERROR: Please delete the folder 'frontend/utils' and use 'frontend_utils' instead:\n"
+        f"  rm -rf {_stale_utils}\n"
+        f"The old 'utils' folder shadows the project's utils package (utils.tools) and causes circular imports."
+    )
 # Disable Gradio analytics to avoid pandas compatibility issue (infer_objects copy param)
 os.environ.setdefault("GRADIO_ANALYTICS_ENABLED", "false")
 
@@ -25,7 +44,7 @@ from experiment_runs import build_experiment_runs_tab
 from custom_inference import build_custom_inference_tab
 
 
-with gr.Blocks(title="Time-LLM-Cryptex", theme=gr.themes.Citrus()) as app:
+with gr.Blocks() as app:
     gr.Markdown("# Time-LLM-Cryptex")
     gr.Markdown("Train, run inference, and backtest Time-LLM models for cryptocurrency forecasting.")
 
@@ -38,4 +57,21 @@ with gr.Blocks(title="Time-LLM-Cryptex", theme=gr.themes.Citrus()) as app:
 
 
 if __name__ == "__main__":
-    app.launch(server_name="0.0.0.0", server_port=9001, share=False, debug=True)
+    # Server: 0.0.0.0 = accept connections from any host (good for hosting)
+    # share=True: get a temporary public URL via Gradio (for quick demos)
+    # root_path: set when behind reverse proxy (e.g. /app for https://yoursite.com/app)
+    server_name = os.environ.get("GRADIO_SERVER_NAME", "0.0.0.0")
+    server_port = int(os.environ.get("GRADIO_SERVER_PORT", "9001"))
+    share = os.environ.get("GRADIO_SHARE", "false").lower() in ("true", "1", "yes")
+    root_path = os.environ.get("GRADIO_ROOT_PATH", "").strip() or None
+    debug = os.environ.get("GRADIO_DEBUG", "true").lower() in ("true", "1", "yes")
+
+    app.launch(
+        server_name=server_name,
+        server_port=server_port,
+        share=share,
+        root_path=root_path,
+        debug=debug,
+        title="Time-LLM-Cryptex",
+        theme=gr.themes.Citrus(),
+    )

@@ -16,12 +16,12 @@ logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
 logger.addHandler(logging.StreamHandler())
 
-# MLflow configuration
-MLFLOW_TRACKING_URI = "http://192.168.1.103:5000"
+# MLflow configuration - override via env vars when deploying (MLFLOW_TRACKING_URI, etc.)
+MLFLOW_TRACKING_URI = os.environ.get("MLFLOW_TRACKING_URI", "http://192.168.1.103:5000")
 os.environ.setdefault("MLFLOW_TRACKING_URI", MLFLOW_TRACKING_URI)
 os.environ.setdefault("AWS_ACCESS_KEY_ID", "minioadmin")
 os.environ.setdefault("AWS_SECRET_ACCESS_KEY", "minioadmin")
-os.environ.setdefault("MLFLOW_S3_ENDPOINT_URL", "http://192.168.1.103:9000")
+os.environ.setdefault("MLFLOW_S3_ENDPOINT_URL", os.environ.get("MLFLOW_S3_ENDPOINT_URL", "http://192.168.1.103:9000"))
 
 
 def _to_date_str(val):

@@ -9,11 +9,6 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 
-from hpo_core.PipelineRunner import PipelineRunner
-from hpo_core.DataManager import DataManager
-from hpo_core.HpoArgs import HpoArgs
-from hpo_core.WorkDir import WorkDir
-
 from .common import MLFLOW_TRACKING_URI, _to_date_str, logger
 
 
@@ -51,6 +46,11 @@ def _fetch_metrics_from_mlflow(client, run_id, pred_horizon=1):
 
 def run_inference_handler(model_name, experiment_name, custom_dataset_path, granularity, aggregate, start_date, end_date, save_path=None):
     """Run inference using PipelineRunner."""
+    from hpo_core.PipelineRunner import PipelineRunner
+    from hpo_core.DataManager import DataManager
+    from hpo_core.HpoArgs import HpoArgs
+    from hpo_core.WorkDir import WorkDir
+
     try:
         if not model_name:
             return "Error: Model Name (Run ID) is required"
@@ -63,14 +63,18 @@ def run_inference_handler(model_name, experiment_name, custom_dataset_path, gran
             p = Path(custom_dataset_path.strip())
             data_path = str(p) if p.is_absolute() else str(project_root / p)
 
+        # None/empty end_date => run through end of dataset; both empty => entire dataset
+        inf_start = _to_date_str(start_date) if (start_date not in (None, "")) else None
+        inf_end = _to_date_str(end_date) if (end_date not in (None, "")) else None
+
         args = HpoArgs(
             parse_cli=False,
             model_name=model_name,
             experiment_name=experiment_name,
             granularity=granularity,
             aggregate=int(aggregate or 1),
-            inf_start=_to_date_str(start_date),
-            inf_end=_to_date_str(end_date),
+            inf_start=inf_start,
+            inf_end=inf_end,
             data_path=data_path,
         )
 
