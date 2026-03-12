@@ -235,8 +235,8 @@ def run_hpo(command):
         yield f"Error: {str(e)}\n\nTraceback:\n{traceback.format_exc()}"
 
 
-def build_training_tab():
-    """Build and return the Training tab UI."""
+def build_training_tab(gpu_dropdown):
+    """Build and return the Training tab UI. Uses gpu_dropdown from the top bar."""
     with gr.TabItem("Training", id="training"):
         gr.Markdown("## Training & Hyperparameter Optimization")
 
@@ -246,7 +246,6 @@ def build_training_tab():
                 gr.Markdown("### Run HPO Configuration")
                 with gr.Row():
                     with gr.Column():
-                        gpu = gr.Textbox(label="GPU", value="1", info="GPU to use")
                         study_name = gr.Textbox(label="Study Name", value=f"{datetime.now().strftime('%m.%d.%y')}_study", info="Optuna study name")
                         granularity = gr.Dropdown(
                             label="Granularity",
@@ -453,7 +452,7 @@ def build_training_tab():
                 generate_cmd_btn.click(
                     fn=build_command,
                     inputs=[
-                        gpu, study_name, granularity, start_date, end_date,
+                        gpu_dropdown, study_name, granularity, start_date, end_date,
                         train_inf_start, train_inf_end, data_path, returns, backtest,
                         experiment_name, trials, aggregate, no_inf_aggregate,
                         log_all_metrics, yaml_file, volatility,
