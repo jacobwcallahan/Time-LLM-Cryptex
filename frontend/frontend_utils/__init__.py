@@ -35,6 +35,15 @@ from .custom_inference_utils import (
     compute_metrics_and_plot_from_csv,
 )
 
+from .experiment_analysis_utils import (
+    fetch_experiment_analysis_data,
+    build_analysis_summary,
+    build_metrics_dataframe,
+    build_params_dataframe,
+    build_metrics_chart,
+    build_multi_metric_chart,
+)
+
 __all__ = [
     "MLFLOW_TRACKING_URI",
     "_to_date_str",
@@ -50,4 +59,10 @@ __all__ = [
     "run_custom_inference",
     "clean_csv_prices",
     "compute_metrics_and_plot_from_csv",
+    "fetch_experiment_analysis_data",
+    "build_analysis_summary",
+    "build_metrics_dataframe",
+    "build_params_dataframe",
+    "build_metrics_chart",
+    "build_multi_metric_chart",
 ]

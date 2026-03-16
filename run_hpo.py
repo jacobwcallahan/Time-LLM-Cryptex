@@ -28,6 +28,7 @@ Arguments:
 """
 
 import optuna
+import sqlalchemy
 
 import subprocess
 import mlflow
@@ -291,12 +292,25 @@ def main(args: HpoArgs):
 
     print(f"Study name: {study_name}")
 
-    study = optuna.create_study(
-        study_name=study_name,
-        direction="maximize", 
-        storage=OPTUNA_STORAGE_PATH,
-        load_if_exists=True # Resume study if it already exists
-    )
+    try:
+        study = optuna.create_study(
+            study_name=study_name,
+            direction="maximize",
+            storage=OPTUNA_STORAGE_PATH,
+            load_if_exists=True,
+        )
+    # 
+    except (sqlalchemy.exc.OperationalError, OSError) as e:
+        local_db = Path.cwd() / "optuna_study.db"
+        fallback_path = f"sqlite:///{local_db}"
+        print(f"Could not open Optuna storage at {OPTUNA_STORAGE_PATH}: {e}")
+        print(f"Falling back to local storage: {fallback_path}")
+        study = optuna.create_study(
+            study_name=study_name,
+            direction="maximize",
+            storage=fallback_path,
+            load_if_exists=True,
+        )
     
     print(f"Data is Prepped... Starting HPO...")
     

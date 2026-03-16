@@ -38,9 +38,11 @@ _pd.Series.infer_objects = _infer_objects_compat
 import gradio as gr
 
 from training import build_training_tab
+from single_run_training import build_single_run_training_tab
 from inference import build_inference_tab
 from backtest import build_backtest_tab
 from experiment_runs import build_experiment_runs_tab
+from experiment_analysis import build_experiment_analysis_tab
 from custom_inference import build_custom_inference_tab
 from frontend_utils.gpu_utils import get_gpu_list_and_status
 
@@ -118,9 +120,11 @@ with gr.Blocks(title="Time-LLM-Cryptex", css="""
 
     with gr.Tabs(elem_classes=["main-tabs"]):
         build_training_tab(gpu_dropdown)
+        build_single_run_training_tab(gpu_dropdown)
         build_inference_tab()
         build_backtest_tab()
         build_experiment_runs_tab()
+        build_experiment_analysis_tab()
         build_custom_inference_tab()
 
 

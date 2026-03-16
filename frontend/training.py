@@ -193,7 +193,7 @@ def save_prompt(prompt, filename="CRYPTEX.txt"):
 def save_yaml_config(yaml_content, filename):
     """Save YAML configuration to file."""
     project_root = Path(__file__).parent.parent
-    config_path = project_root / "config" / filename
+    config_path = project_root / "config" / "yaml_params" / filename
     config_path.parent.mkdir(parents=True, exist_ok=True)
     with open(config_path, "w") as f:
         f.write(yaml_content)

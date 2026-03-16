@@ -17,30 +17,51 @@ def _project_root():
 
 
 def _fetch_metrics_from_mlflow(client, run_id, pred_horizon=1):
-    """Fetch MAE, MSE, MDA from MLflow artifacts for a specific prediction horizon."""
+    """Fetch MAE, MSE, MDA from MLflow artifacts for a specific prediction horizon.
+    Each metric is fetched independently - if one file is missing, the others are still returned.
+    Tries multiple artifact path variants (some pipelines store under different paths).
+    """
     pred_horizon = int(pred_horizon) if pred_horizon else 1
     mae, mse, mda = None, None, None
-    for artifact_name, suffix, out_var in [
-        ("mae_metrics.csv", "mae", "mae"),
-        ("mse_metrics.csv", "mse", "mse"),
-        ("mda_metrics.csv", "mda", "mda"),
-    ]:
-        try:
-            path = mlflow.artifacts.download_artifacts(run_id=run_id, artifact_path=artifact_name)
-            df = pd.read_csv(path)
-            if "prediction" in df.columns and "value" in df.columns:
-                target_pred = f"inf_pred_{pred_horizon}_{suffix}"
-                row = df[df["prediction"].astype(str).str.strip() == target_pred]
-                if len(row) > 0:
-                    val = float(row["value"].iloc[0])
-                    if out_var == "mae":
-                        mae = val
-                    elif out_var == "mse":
-                        mse = val
+
+    def _try_fetch(artifact_variants, suffix, out_var):
+        """Try to fetch a single metric from any of the given artifact paths."""
+        for artifact_path in artifact_variants:
+            try:
+                downloaded = mlflow.artifacts.download_artifacts(run_id=run_id, artifact_path=artifact_path)
+                p = Path(downloaded)
+                if p.is_dir():
+                    # Prefer metric-specific files (run_inf_and_backtest uses mda_vals.csv)
+                    for name in [f"{suffix}_metrics.csv", f"{suffix}_vals.csv"]:
+                        candidate = p / name
+                        if candidate.exists():
+                            csv_path = candidate
+                            break
                     else:
-                        mda = val
-        except Exception as e:
-            logger.debug(f"Could not fetch {artifact_name}: {e}")
+                        csv_files = list(p.glob("*.csv"))
+                        csv_path = csv_files[0] if csv_files else None
+                else:
+                    csv_path = p if p.suffix == ".csv" else None
+                if csv_path is None or not csv_path.exists():
+                    continue
+                df = pd.read_csv(csv_path)
+                # Support both 'prediction' (CalcMetrics) and 'metric' (run_inf_and_backtest) column names
+                pred_col = "prediction" if "prediction" in df.columns else ("metric" if "metric" in df.columns else None)
+                if pred_col is None or "value" not in df.columns:
+                    continue
+                target_pred = f"inf_pred_{pred_horizon}_{suffix}"
+                row = df[df[pred_col].astype(str).str.strip() == target_pred]
+                if len(row) > 0:
+                    return float(row["value"].iloc[0])
+            except Exception as e:
+                logger.debug(f"Could not fetch {artifact_path}: {e}")
+        return None
+
+    # Try multiple path variants per metric (different pipelines store differently)
+    mae = _try_fetch(["mae_metrics.csv", "mae_metrics", "mae_metrics/mae_metrics.csv"], "mae", "mae")
+    mse = _try_fetch(["mse_metrics.csv", "mse_metrics", "mse_metrics/mse_metrics.csv"], "mse", "mse")
+    mda = _try_fetch(["mda_metrics.csv", "mda_metrics", "mda_metrics/mda_metrics.csv"], "mda", "mda")
+
     return mae, mse, mda
 
 
