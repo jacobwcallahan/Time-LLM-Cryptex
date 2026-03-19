@@ -12,7 +12,7 @@ http://<your-machine-ip>:9001
 ```bash
 GRADIO_SHARE=true python app.py
 ```
-Gradio will print a public URL (e.g. `https://xxx.gradio.live`) that works for ~72 hours.
+Gradio will print a public URL (e.g. `https://xxx.gradio.live`) that works for ~1 week.
 
 ### 3. Production behind reverse proxy (nginx, etc.)
 
